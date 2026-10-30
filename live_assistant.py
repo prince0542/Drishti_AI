@@ -143,36 +143,64 @@ class LiveScanWorker(threading.Thread):
     def run(self):
         if cv2 is None:
             self.controller.current_status = "Error: OpenCV unavailable"
+            self.controller.is_active = False
             return
 
         cap = None
         try:
-            # Try DirectShow first on Windows
-            if hasattr(cv2, "CAP_DSHOW"):
-                cap = cv2.VideoCapture(self.camera_index, cv2.CAP_DSHOW)
-            else:
-                cap = cv2.VideoCapture(self.camera_index)
+            # Auto-detect and open best working camera backend and index
+            preferred_indices = [self.camera_index, 0 if self.camera_index != 0 else 1]
+            for idx in preferred_indices:
+                # 1. Try DirectShow backend
+                if hasattr(cv2, "CAP_DSHOW"):
+                    test_cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+                    if test_cap is not None and test_cap.isOpened():
+                        ret, test_frame = test_cap.read()
+                        if ret and test_frame is not None:
+                            cap = test_cap
+                            self.camera_index = idx
+                            break
+                        test_cap.release()
 
-            if not cap.isOpened():
-                # Fallback to index 0 if index 1 failed
-                alt_idx = 0 if self.camera_index != 0 else 1
-                cap = cv2.VideoCapture(alt_idx, cv2.CAP_DSHOW) if hasattr(cv2, "CAP_DSHOW") else cv2.VideoCapture(alt_idx)
-                if not cap.isOpened():
-                    self.controller.current_status = "Error: Camera device could not be opened"
-                    return
+                # 2. Try default/MSMF backend
+                test_cap = cv2.VideoCapture(idx)
+                if test_cap is not None and test_cap.isOpened():
+                    ret, test_frame = test_cap.read()
+                    if ret and test_frame is not None:
+                        cap = test_cap
+                        self.camera_index = idx
+                        break
+                    test_cap.release()
+
+            if cap is None or not cap.isOpened():
+                self.controller.current_status = "Error: Camera device could not be opened. Check permissions."
+                self.controller.camera_status = "Error"
+                self.controller.is_active = False
+                return
 
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-            self.controller.camera_status = "Active (Live Stream)"
+            self.controller.camera_status = f"Active (Camera {self.camera_index})"
             self.controller.current_status = "Scanning Active"
 
+            fail_count = 0
             while not self._stop_event.is_set():
                 ret, frame = cap.read()
                 if not ret or frame is None:
-                    time.sleep(0.1)
+                    fail_count += 1
+                    if fail_count > 25:
+                        # Attempt to re-initialize camera if stalled
+                        try:
+                            cap.release()
+                            cap = cv2.VideoCapture(self.camera_index)
+                            fail_count = 0
+                        except Exception:
+                            pass
+                    time.sleep(0.08)
                     continue
 
+                fail_count = 0
                 # Store latest frame for UI display
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 pil_img = Image.fromarray(rgb)
@@ -188,15 +216,19 @@ class LiveScanWorker(threading.Thread):
                             # Deliver speech announcement
                             self.controller.speak_announcement(announcement)
 
-                time.sleep(0.05)
+                time.sleep(0.04)
 
         except Exception as e:
-            self.controller.current_status = f"Scanner error: {str(e)[:35]}"
+            self.controller.current_status = f"Scanner error: {str(e)[:40]}"
         finally:
             if cap is not None and cap.isOpened():
-                cap.release()
+                try:
+                    cap.release()
+                except Exception:
+                    pass
             self.controller.camera_status = "Inactive"
             self.controller.current_status = "Stopped"
+            self.controller.is_active = False
 
 
 class LiveAssistantController:

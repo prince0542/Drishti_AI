@@ -682,7 +682,18 @@ def render_camera_assistant():
         scan_badge = '<span class="status-badge badge-online">🔄 Scanning: Active (every 2.5s)</span>' if is_active and not is_paused else ('<span class="status-badge badge-warning">🔄 Scanning: Paused</span>' if is_paused else '<span class="status-badge">🔄 Scanning: Idle</span>')
         mic_badge = '<span class="status-badge badge-online">🎙️ Mic: Listening for Voice Commands</span>'
 
-        st.markdown(f'<div style="margin-bottom: 1rem;">{cam_badge} {scan_badge} {mic_badge}</div>', unsafe_allow_html=True)
+        # Camera Selector & Status Badges
+        col_b1, col_b2 = st.columns([2, 1])
+        with col_b1:
+            st.markdown(f'<div style="margin-bottom: 0.5rem;">{cam_badge} {scan_badge} {mic_badge}</div>', unsafe_allow_html=True)
+        with col_b2:
+            st.session_state.live_cam_idx = st.selectbox(
+                "Hardware Camera Device:",
+                options=[1, 0],
+                format_func=lambda x: f"📷 Camera Index {x} ({'Default' if x == 1 else 'Alternate'})",
+                key="live_camera_selector",
+                label_visibility="collapsed",
+            )
 
         # Main Control Buttons
         c_btn1, c_btn2, c_btn3 = st.columns(3)
@@ -690,11 +701,13 @@ def render_camera_assistant():
         with c_btn1:
             if st.button("▶️ Start Assistant (शुरू करें)", key="btn_live_start", use_container_width=True, type="primary"):
                 msg = live_assistant.live_assistant.start(
-                    camera_index=1,
+                    camera_index=st.session_state.get("live_cam_idx", 1),
                     lang=st.session_state.language,
                     scan_interval=st.session_state.live_scan_interval,
                 )
                 speak_text("Drishti live assistant started. Observing your surroundings.")
+                # Give camera worker 1 second to capture the initial frame
+                time.sleep(1.2)
                 st.rerun()
 
         with c_btn2:
@@ -720,15 +733,18 @@ def render_camera_assistant():
         with col_feed:
             st.markdown('<div class="drishti-card">', unsafe_allow_html=True)
             st.markdown('<h3 class="drishti-h3">📹 Live Camera View</h3>', unsafe_allow_html=True)
-            if is_active and state["latest_frame"] is not None:
-                st.image(state["latest_frame"], caption=f"Live Feed ({state['scanning_status']})", use_container_width=True)
+            if is_active:
+                if state["latest_frame"] is not None:
+                    st.image(state["latest_frame"], caption=f"Live Feed ({state['scanning_status']})", use_container_width=True)
+                else:
+                    st.info("🔄 Initializing camera hardware and connecting live stream...")
             else:
                 st.markdown(
                     """
                     <div style="background: #0B0F19; border: 2px dashed #334155; border-radius: 12px; padding: 3rem 1rem; text-align: center; color: #94A3B8;">
                         <span style="font-size: 3rem;">📷</span>
                         <p style="margin-top: 10px; font-weight: 600;">Camera is currently stopped.</p>
-                        <p style="font-size: 0.9rem;">Click <b>Start Assistant</b> or say <b>"Drishti, start"</b> to begin live scanning.</p>
+                        <p style="font-size: 0.9rem;">Click <b>Start Assistant</b> or press <b>[Spacebar]</b> to begin live scanning.</p>
                     </div>
                     """,
                     unsafe_allow_html=True,
