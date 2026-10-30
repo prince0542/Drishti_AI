@@ -40,11 +40,12 @@ While several cloud-based visual assistant applications exist, they require high
 Drishti-AI/
 │
 ├── app.py                     # Main Streamlit accessibility UI & section routing
+├── live_assistant.py          # Real-time background live scanner, deduplication & voice commands
 ├── vision.py                  # Local Ollama /api/chat vision pipeline & prompts
-├── ocr_reader.py              # Tesseract OCR & OpenCV image preprocessing
-├── speech.py                  # Offline pyttsx3 speech synthesis & voice discovery
+├── ocr_reader.py              # Tesseract + RapidOCR engine & image preprocessing
+├── speech.py                  # In-browser Web Speech & offline pyttsx3 speech synthesis
 ├── camera.py                  # Camera capture (Streamlit WebRTC & OpenCV DirectShow)
-├── config.py                  # Configuration, safety disclaimers & environment paths
+├── config.py                  # Configuration, safety disclaimers & scan intervals
 ├── sample_images_generator.py # Auto-generator for accessibility test images
 ├── requirements.txt           # Python library dependencies
 ├── README.md                  # Comprehensive documentation & setup manual
@@ -57,22 +58,39 @@ Drishti-AI/
 
 ## 3. Key Features
 
-### A. 📷 AI Scene Description
-- Upload JPG, PNG, WEBP, or BMP images.
+### A. 🟢 Real-Time Continuous Live Camera Scanning
+- Automatically observes physical surroundings without manual clicking.
+- Periodic frame sampling (adjustable 1.5s–5.0s, default 2.5s) optimized for CPU and 8 GB RAM.
+- Non-blocking asynchronous background thread (`LiveScanWorker`) keeps the UI 100% fluid.
+- Real-time OCR text fusion (signboards, labels, documents) alongside vision scene descriptions.
+
+### B. 🎙️ Hands-Free Voice Commands (Full-Duplex)
+- Control the assistant completely through voice without touching the keyboard:
+  - **"Drishti, start"** / **"Start scanning"** / **"Start assistant"** ➔ Activates continuous camera scanning.
+  - **"Drishti, stop"** / **"Stop"** / **"Stop speaking"** ➔ Immediately halts scanning and cancels active speech.
+  - **"Resume"** / **"Resume scanning"** ➔ Resumes live scanning.
+- Full-duplex interaction: can hear "Stop" while audio is actively speaking!
+
+### C. 🧠 Smart Announcement System (Anti-Repetition)
+- **Duplicate-Description Filtering:** SequenceMatcher string comparison prevents describing the same object repeatedly.
+- **Cooldown Window (18 seconds):** Suppresses repeating static objects while prioritizing newly detected items.
+- **Object Tag Extraction:** Identifies and displays active objects (`Bottle`, `Person`, `Chair`, `Desk`, etc.) as accessible pill badges.
+
+### D. 📷 AI Scene Description (Snapshot Mode)
+- Upload JPG, PNG, WEBP, or BMP images, or take single photo snapshots.
 - Describe objects, spatial layout (left, right, center, foreground, background), colors, and lighting.
 - Tailored prompts for obstacle detection, ground elevation changes, and people identification.
-- Grounded visual responses that explicitly communicate uncertainty if an image is dark or blurry.
 
-### B. 📖 Bilingual OCR Reader
+### E. 📖 Bilingual OCR Reader (RapidOCR + Tesseract)
 - Extracts printed and digital text from medicine boxes, warning signs, menus, and notices.
 - Support for **English (`eng`)**, **Hindi (`hin`)**, or combined **(`eng+hin`)**.
 - Built-in OpenCV preprocessing pipeline (bilateral filtering, adaptive thresholding, and contrast CLAHE).
 - Word count and OCR confidence scoring.
 
-### C. 🔊 Offline Text-to-Speech
-- Synthesizes speech locally with zero external network dependency.
-- Playback controls: **Speak**, **Stop**, **Replay Last Response**, and web audio player.
-- Automatic detection of installed Windows SAPI5 voices.
+### F. 🔊 Dual-Engine Text-to-Speech
+- Browser native Web Speech API (`SpeechSynthesis`) provides zero-latency speaker playback.
+- Offline `pyttsx3` SAPI5 voice fallback with WAV caching.
+- Playback controls: **Speak Again**, **Stop**, and **Repeat Last Response**.
 - Direct guidance for enabling official Hindi voices in Windows.
 
 ### D. 🎥 Real-Time Camera Assistant

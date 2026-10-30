@@ -70,9 +70,17 @@ DEFAULT_OCR_LANGUAGES = "eng+hin"
 FALLBACK_OCR_LANGUAGES = "eng"
 
 # Offline Text-To-Speech (pyttsx3) Settings
-TTS_DEFAULT_RATE = 165  # Words per minute (comfortable listening pace)
+TTS_DEFAULT_RATE = 195  # Fast, crisp listening pace for visually impaired users
 TTS_DEFAULT_VOLUME = 1.0  # Range 0.0 to 1.0
 TTS_AUDIO_FILENAME = "drishti_spoken_response.wav"
+
+# Live Real-Time Scanning Configuration
+DEFAULT_SCAN_INTERVAL = 2.0       # Seconds between live camera analysis passes
+MIN_SCAN_INTERVAL = 1.0           # Minimum scan interval
+MAX_SCAN_INTERVAL = 4.0           # Maximum scan interval
+DUPLICATE_COOLDOWN_SECONDS = 15.0 # Cooldown to avoid repeating identical descriptions
+LIVE_IMAGE_WIDTH = 480            # Resized frame width for fast CPU/RAM inference
+LIVE_IMAGE_HEIGHT = 360           # Resized frame height
 
 # Supported Image Extensions
 SUPPORTED_IMAGE_TYPES = ["jpg", "jpeg", "png", "bmp", "webp"]
@@ -80,21 +88,18 @@ SUPPORTED_IMAGE_TYPES = ["jpg", "jpeg", "png", "bmp", "webp"]
 # Vision Prompts for Accessibility
 VISION_PROMPT_EN = (
     "You are Drishti AI, an offline accessibility assistant for visually impaired users. "
-    "Analyze the image and provide a concise, high-value spoken description: "
-    "1. Immediate surroundings and spatial layout (what is in front, left, right, center). "
-    "2. Key objects, people, landmarks, colors, and lighting. "
-    "3. Any visible text, signs, or prominent labels. "
-    "4. Highlight any potential physical obstacles or ground changes with clear caution. "
-    "Use simple, natural, dignified language. Do not invent details not visible. "
-    "If the image is blurry, dim, or unclear, explicitly say so."
+    "Directly output a clear, concise spoken description in 2 to 3 natural sentences: "
+    "1. Key objects, people, colors, and spatial positions (what is in front, left, right). "
+    "2. Any prominent visible text or signboards. "
+    "3. Any obstacles or navigational notes. "
+    "Use simple, direct language. Do not output conversational preamble or thinking."
 )
 
 VISION_PROMPT_HI = (
     "आप दृष्टि एआई (Drishti AI) हैं, जो दृष्टिबाधित उपयोगकर्ताओं के लिए एक ऑफ़लाइन सुगम्यता सहायक हैं। "
-    "इस चित्र को ध्यान से देखकर सरल, स्वाभाविक और स्पष्ट हिंदी में दृश्य का वर्णन करें: "
-    "1. आसपास का वातावरण और स्थिति (सामने, बाईं ओर, दाईं ओर, बीच में क्या है)। "
-    "2. मुख्य वस्तुएं, लोग, रंग और प्रकाश की स्थिति। "
-    "3. कोई भी दिखाई देने वाला पाठ, साइनबोर्ड या निर्देश। "
-    "4. यदि कोई संभावित बाधा या रास्ता हो, तो सावधानी के साथ बताएं। "
-    "काल्पनिक विवरण न दें। यदि चित्र धुंधला या अंधेरा है, तो स्पष्ट रूप से बताएं।"
+    "सीधे 2 से 3 सरल और स्पष्ट वाक्यों में दृश्य का वर्णन करें: "
+    "1. मुख्य वस्तुएं, लोग, रंग और स्थिति (सामने, बाएं, दाएं क्या है)। "
+    "2. कोई दिखाई देने वाला पाठ या साइनबोर्ड। "
+    "3. कोई बाधा या रास्ता। "
+    "सीधे उपयोगी विवरण दें, अनावश्यक भूमिका न बांधें।"
 )

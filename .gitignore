@@ -27,3 +27,14 @@ $RECYCLE.BIN/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Environment & Secrets
+.env
+.env.*
+*.log
+
+# Private captures & cache
+*.jpg
+*.jpeg
+user_captures/
+!sample_images/*.png

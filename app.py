@@ -4,17 +4,20 @@ DRISHTI AI — OFFLINE ACCESSIBILITY ASSISTANT
 See the World Through AI
 ====================================================================
 A complete, offline-first assistive application for visually impaired
-users, featuring local multimodal AI (Gemma 4 / Ollama), Tesseract OCR,
-offline text-to-speech (pyttsx3), camera integration, and accessible UI.
+users, featuring Real-Time Live Camera Scanning, Voice Command Control,
+Smart Duplicate-Filtering Announcements, Bilingual OCR, and Speech.
 ====================================================================
 """
 
 import os
 import io
 import time
+import json
+import hashlib
 from pathlib import Path
 from PIL import Image
 import streamlit as st
+import streamlit.components.v1 as components
 
 # Local modules
 import config
@@ -23,6 +26,7 @@ import ocr_reader
 import speech
 import camera
 import sample_images_generator
+import live_assistant
 
 # Page Configuration
 st.set_page_config(
@@ -40,7 +44,12 @@ def init_session_state():
         "language": "en",  # 'en' or 'hi'
         "high_contrast": False,
         "large_text": True,
-        "auto_speak": False,
+        "auto_speak": True,
+        "auto_describe_camera": True,
+        "auto_describe_upload": False,
+        "live_scan_interval": config.DEFAULT_SCAN_INTERVAL,
+        "last_processed_cam_hash": None,
+        "last_processed_upload_hash": None,
         "ollama_url": config.DEFAULT_OLLAMA_URL,
         "model_name": config.DEFAULT_MODEL_NAME,
         "custom_tesseract_path": "",
@@ -51,7 +60,9 @@ def init_session_state():
         "last_audio_file": None,
         "last_description_result": None,
         "last_ocr_result": None,
-        "active_section": "Home Dashboard",
+        "active_section": "Camera Assistant",
+        "voice_command_action": None,
+        "last_auto_spoken_live": None,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -60,162 +71,193 @@ def init_session_state():
 init_session_state()
 
 # -----------------------------------------------------------------------------
-# Accessible CSS Styling
+# Professional AI Product Design & Theme Engine
 # -----------------------------------------------------------------------------
 def apply_custom_styles():
     high_contrast = st.session_state.high_contrast
     large_text = st.session_state.large_text
 
     font_base = "18px" if large_text else "16px"
-    font_h1 = "2.4rem" if large_text else "2.0rem"
-    font_h2 = "1.8rem" if large_text else "1.5rem"
+    font_h1 = "2.3rem" if large_text else "1.9rem"
+    font_h2 = "1.65rem" if large_text else "1.4rem"
 
     if high_contrast:
-        # Ultra High Contrast (Accessibility Mode)
-        bg_primary = "#000000"
-        bg_card = "#0A0A0A"
-        border_color = "#FFFF00"
+        bg_app = "#000000"
+        bg_sidebar = "#0A0A0A"
+        bg_card = "#000000"
+        border_card = "#FFFF00"
         text_primary = "#FFFFFF"
         text_secondary = "#FFFF00"
         accent_color = "#00FFFF"
         button_bg = "#FFFF00"
         button_text = "#000000"
-        badge_bg = "#111111"
+        button_border = "#FFFF00"
     else:
-        # Professional Modern Dark Navy / Purple-Blue Theme
-        bg_primary = "#0B0F19"
-        bg_card = "#161F30"
-        border_color = "#2D3748"
+        bg_app = "#090D16"
+        bg_sidebar = "#0D1322"
+        bg_card = "#131C2E"
+        border_card = "#22314E"
         text_primary = "#F8FAFC"
         text_secondary = "#94A3B8"
         accent_color = "#6366F1"
         button_bg = "linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)"
         button_text = "#FFFFFF"
-        badge_bg = "#1E293B"
+        button_border = "#4F46E5"
 
     css = f"""
     <style>
-    /* Global Styles */
     .stApp {{
-        background-color: {bg_primary};
-        color: {text_primary};
+        background: {bg_app} !important;
+        color: {text_primary} !important;
         font-size: {font_base};
-        font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
     }}
-    
+
+    section[data-testid="stSidebar"] {{
+        background-color: {bg_sidebar} !important;
+        border-right: 1px solid #1E293B !important;
+    }}
+
+    section[data-testid="stSidebar"] * {{
+        color: {text_primary} !important;
+    }}
+
+    section[data-testid="stSidebar"] .stRadio label {{
+        color: #E2E8F0 !important;
+        font-size: 1.05rem !important;
+        padding: 4px 0;
+    }}
+
     h1, .drishti-h1 {{
         color: {text_primary} !important;
         font-size: {font_h1} !important;
         font-weight: 800 !important;
         letter-spacing: -0.5px;
-        margin-bottom: 0.5rem;
+        margin-bottom: 0.4rem;
     }}
 
     h2, .drishti-h2 {{
-        color: {accent_color} !important;
+        color: #818CF8 !important;
         font-size: {font_h2} !important;
         font-weight: 700 !important;
         margin-top: 1rem;
+        margin-bottom: 0.5rem;
     }}
 
     h3, .drishti-h3 {{
         color: {text_primary} !important;
-        font-size: 1.3rem !important;
-        font-weight: 600;
+        font-size: 1.25rem !important;
+        font-weight: 700;
+        margin-bottom: 0.5rem;
     }}
 
-    /* Drishti Accessible Card */
     .drishti-card {{
-        background-color: {bg_card};
-        border: 2px solid {border_color};
-        border-radius: 12px;
-        padding: 1.25rem 1.5rem;
+        background: {bg_card};
+        border: 1px solid {border_card};
+        border-radius: 14px;
+        padding: 1.4rem 1.6rem;
         margin-bottom: 1.25rem;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+        box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4);
     }}
 
     .drishti-card-highlight {{
-        background-color: {bg_card};
-        border: 2.5px solid {accent_color};
-        border-radius: 12px;
-        padding: 1.25rem 1.5rem;
+        background: {bg_card};
+        border: 2px solid {accent_color};
+        border-radius: 14px;
+        padding: 1.4rem 1.6rem;
         margin-bottom: 1.25rem;
+        box-shadow: 0 12px 30px -5px rgba(99, 102, 241, 0.25);
     }}
 
-    /* Accessible Safety Alert Banner */
     .safety-banner {{
-        background-color: #2D1515;
-        border: 2px solid #EF4444;
-        border-radius: 10px;
+        background: linear-gradient(135deg, rgba(239, 68, 68, 0.15) 0%, rgba(153, 27, 27, 0.2) 100%);
+        border: 1.5px solid #EF4444;
+        border-radius: 12px;
         padding: 1rem 1.25rem;
         color: #FEE2E2;
         font-weight: 600;
         margin-bottom: 1.5rem;
     }}
 
-    /* Badges */
     .status-badge {{
         display: inline-block;
-        padding: 0.35rem 0.75rem;
+        padding: 0.35rem 0.8rem;
         border-radius: 9999px;
         font-size: 0.85rem;
         font-weight: 700;
         margin-right: 0.5rem;
         margin-bottom: 0.5rem;
-        background-color: {badge_bg};
-        border: 1px solid {border_color};
+        background: #111827;
+        border: 1px solid #374151;
     }}
 
     .badge-online {{
-        color: #10B981;
-        border-color: #10B981;
+        color: #10B981 !important;
+        border-color: #10B981 !important;
     }}
 
     .badge-warning {{
-        color: #F59E0B;
-        border-color: #F59E0B;
+        color: #F59E0B !important;
+        border-color: #F59E0B !important;
     }}
 
     .badge-offline {{
-        color: #EF4444;
-        border-color: #EF4444;
+        color: #EF4444 !important;
+        border-color: #EF4444 !important;
     }}
 
-    /* Buttons */
+    .object-pill {{
+        display: inline-block;
+        padding: 0.4rem 0.9rem;
+        border-radius: 9999px;
+        font-size: 0.95rem;
+        font-weight: 700;
+        margin-right: 0.5rem;
+        margin-bottom: 0.5rem;
+        background: rgba(99, 102, 241, 0.2);
+        border: 1.5px solid #818CF8;
+        color: #EEF2FF;
+    }}
+
     .stButton > button {{
         background: {button_bg} !important;
         color: {button_text} !important;
         font-weight: 700 !important;
-        font-size: 1.05rem !important;
-        border-radius: 8px !important;
-        padding: 0.65rem 1.5rem !important;
-        border: 1px solid {border_color} !important;
-        transition: all 0.2s ease-in-out;
-        min-height: 48px; /* Accessible touch target */
+        font-size: 1.1rem !important;
+        border-radius: 10px !important;
+        padding: 0.75rem 1.5rem !important;
+        border: 1px solid {button_border} !important;
+        min-height: 50px;
+        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        box-shadow: 0 4px 12px rgba(79, 70, 229, 0.25);
     }}
 
     .stButton > button:hover {{
-        transform: translateY(-1px);
-        box-shadow: 0 6px 12px rgba(99, 102, 241, 0.3);
+        transform: translateY(-2px);
+        box-shadow: 0 8px 20px rgba(99, 102, 241, 0.4);
     }}
 
-    /* Large Readable Text Box */
+    .btn-stop > button {{
+        background: linear-gradient(135deg, #DC2626 0%, #991B1B 100%) !important;
+        border-color: #EF4444 !important;
+    }}
+
+    .btn-resume > button {{
+        background: linear-gradient(135deg, #D97706 0%, #B45309 100%) !important;
+        border-color: #F59E0B !important;
+    }}
+
     .result-text-box {{
-        background-color: {bg_card};
-        border: 2px solid {accent_color};
-        border-radius: 10px;
-        padding: 1.25rem;
-        font-size: 1.2rem;
-        line-height: 1.7;
-        color: {text_primary};
+        background: linear-gradient(180deg, rgba(16, 185, 129, 0.12) 0%, rgba(6, 78, 59, 0.16) 100%);
+        border: 2px solid #10B981;
+        border-radius: 12px;
+        padding: 1.4rem;
+        font-size: 1.35rem;
+        line-height: 1.75;
+        color: #FFFFFF;
+        font-weight: 600;
         margin: 1rem 0;
         white-space: pre-wrap;
-    }}
-
-    /* Keyboard focus ring */
-    button:focus, input:focus, select:focus, textarea:focus {{
-        outline: 3px solid {accent_color} !important;
-        outline-offset: 2px !important;
     }}
     </style>
     """
@@ -224,32 +266,107 @@ def apply_custom_styles():
 apply_custom_styles()
 
 # -----------------------------------------------------------------------------
-# Helper Functions: Audio & Speech Handling
+# Dual-Engine Voice & Audio Output (Browser Web Speech + Audio Element)
 # -----------------------------------------------------------------------------
-def speak_text(text: str):
-    """Generates audio file and updates session state for replay."""
+def trigger_browser_speech(text: str, lang: str = "en"):
+    """
+    Invokes the browser's native Web Speech API (HTML5 SpeechSynthesis) with
+    high-clarity natural voices, crisp 1.25x response rate, and zero-latency queue clearing.
+    Plays through the user's computer speakers or headphones in real time.
+    """
     if not text or not text.strip():
-        st.warning("No text to speak.")
+        return
+
+    safe_text = json.dumps(text.strip())
+    voice_lang = "hi-IN" if lang == "hi" else "en-US"
+
+    js_code = f"""
+    <script>
+    (function() {{
+        try {{
+            if ('speechSynthesis' in window) {{
+                window.speechSynthesis.cancel();
+                
+                var utterance = new SpeechSynthesisUtterance({safe_text});
+                utterance.rate = 1.25;  // Fast, crisp, responsive pace
+                utterance.pitch = 1.02; // Enhanced clarity
+                utterance.lang = '{voice_lang}';
+
+                // Find highest quality natural voice
+                function selectBestVoice() {{
+                    var voices = window.speechSynthesis.getVoices();
+                    if (!voices || voices.length === 0) return null;
+                    var target = '{voice_lang}'.toLowerCase().split('-')[0];
+                    var matches = voices.filter(function(v) {{
+                        return v.lang && v.lang.toLowerCase().replace('_', '-').startsWith(target);
+                    }});
+                    if (matches.length > 0) {{
+                        var natural = matches.find(function(v) {{
+                            var n = v.name.toLowerCase();
+                            return n.includes('natural') || n.includes('neural') || n.includes('google') || n.includes('online');
+                        }});
+                        return natural || matches[0];
+                    }}
+                    return voices[0];
+                }}
+
+                var best = selectBestVoice();
+                if (best) {{
+                    utterance.voice = best;
+                }} else if (window.speechSynthesis.onvoiceschanged !== undefined) {{
+                    window.speechSynthesis.onvoiceschanged = function() {{
+                        var v = selectBestVoice();
+                        if (v) utterance.voice = v;
+                    }};
+                }}
+
+                window.speechSynthesis.speak(utterance);
+            }}
+        }} catch(e) {{
+            console.error('Speech synthesis error:', e);
+        }}
+    }})();
+    </script>
+    """
+    components.html(js_code, height=0, width=0)
+
+
+def speak_text(text: str):
+    """Speaks text using Web Speech API and generates local audio file."""
+    if not text or not text.strip():
         return
 
     st.session_state.last_spoken_text = text.strip()
-    result = speech.speech_manager.generate_audio_file(
-        text=text,
-        voice_id=st.session_state.selected_voice_id,
-        rate=st.session_state.speech_rate,
-        volume=st.session_state.speech_volume,
-    )
-    if result["success"]:
-        st.session_state.last_audio_file = result["audio_path"]
-        # Also attempt direct system audio playback
-        speech.speech_manager.speak_direct(
+    trigger_browser_speech(text, lang=st.session_state.language)
+
+    try:
+        res = speech.speech_manager.generate_audio_file(
             text=text,
             voice_id=st.session_state.selected_voice_id,
             rate=st.session_state.speech_rate,
             volume=st.session_state.speech_volume,
         )
-    else:
-        st.error(f"Speech synthesis error: {result['error']}")
+        if res.get("success"):
+            st.session_state.last_audio_file = res["audio_path"]
+    except Exception:
+        pass
+
+
+def stop_all_speech():
+    """Stops all active speech synthesis immediately."""
+    speech.speech_manager.stop()
+    js_stop = """
+    <script>
+    if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+    }
+    </script>
+    """
+    components.html(js_stop, height=0, width=0)
+
+
+# Connect Live Assistant speech callback so background scanning speaks aloud automatically
+live_assistant.live_assistant.set_speak_callback(speak_text)
 
 
 def render_audio_controls(text_to_speak: str, key_prefix: str = "audio"):
@@ -257,13 +374,13 @@ def render_audio_controls(text_to_speak: str, key_prefix: str = "audio"):
     c1, c2, c3 = st.columns([1.5, 1, 1])
 
     with c1:
-        if st.button("🔊 Read Aloud (बोलें)", key=f"{key_prefix}_speak", use_container_width=True):
+        if st.button("🔊 Speak Again (दोबारा बोलें)", key=f"{key_prefix}_speak", use_container_width=True):
             speak_text(text_to_speak)
 
     with c2:
         if st.button("⏹️ Stop (रोकें)", key=f"{key_prefix}_stop", use_container_width=True):
-            speech.speech_manager.stop()
-            st.info("Audio playback stopped.")
+            stop_all_speech()
+            st.info("Audio stopped.")
 
     with c3:
         if st.button("🔁 Repeat Last", key=f"{key_prefix}_repeat", use_container_width=True):
@@ -271,16 +388,175 @@ def render_audio_controls(text_to_speak: str, key_prefix: str = "audio"):
             if last_txt:
                 speak_text(last_txt)
             else:
-                st.info("No prior response to repeat.")
+                st.info("No prior response saved.")
 
-    # In-browser audio player if audio file is generated
     if st.session_state.last_audio_file and os.path.exists(st.session_state.last_audio_file):
         try:
             with open(st.session_state.last_audio_file, "rb") as af:
-                audio_bytes = af.read()
-            st.audio(audio_bytes, format="audio/wav")
+                st.audio(af.read(), format="audio/wav")
         except Exception:
             pass
+
+
+# -----------------------------------------------------------------------------
+# Embedded Voice Command & Accessibility Hotkey Listener
+# -----------------------------------------------------------------------------
+def render_voice_command_listener():
+    """
+    Renders an HTML5 SpeechRecognition component and global keyboard listeners.
+    """
+    js_listener = """
+    <div style="background: rgba(19, 28, 46, 0.95); border: 1.5px solid #6366F1; border-radius: 12px; padding: 12px 18px; margin: 8px 0; color: #FFFFFF; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 4px 15px rgba(0,0,0,0.3);">
+        <div style="display: flex; align-items: center; gap: 14px;">
+            <div id="micPulse" style="width: 14px; height: 14px; border-radius: 50%; background: #10B981; box-shadow: 0 0 10px #10B981; transition: all 0.3s ease;"></div>
+            <div>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <strong style="font-size: 1.05rem; color: #F8FAFC; letter-spacing: 0.3px;">🎙️ Voice & Accessibility Control:</strong>
+                    <span id="voiceBadge" style="font-size: 0.75rem; background: rgba(16, 185, 129, 0.2); color: #34D399; padding: 2px 8px; border-radius: 9999px; font-weight: 700; border: 1px solid #10B981;">ACTIVE</span>
+                </div>
+                <div id="voiceStatus" style="font-size: 0.88rem; color: #94A3B8; margin-top: 3px;">
+                    Say <b>"Start"</b>, <b>"Stop"</b>, <b>"Resume"</b> or press <b>[Space]</b> to Start/Pause, <b>[Esc]</b> to Stop
+                </div>
+            </div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 0.75rem; color: #64748B;">Last Action:</span>
+            <div id="lastCmd" style="font-size: 0.88rem; font-weight: 700; color: #A5B4FC; background: #0F172A; padding: 5px 12px; border-radius: 8px; border: 1px solid #334155; min-width: 80px; text-align: center;">Ready</div>
+        </div>
+    </div>
+
+    <style>
+    @keyframes activePulse {
+        0% { transform: scale(0.92); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+        70% { transform: scale(1.15); box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); }
+        100% { transform: scale(0.92); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+    }
+    #micPulse.pulsing {
+        animation: activePulse 1.4s infinite;
+    }
+    </style>
+
+    <script>
+    (function() {
+        var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRecognition) {
+            document.getElementById('voiceStatus').innerText = "Web SpeechRecognition not supported in this browser.";
+            document.getElementById('micPulse').style.background = "#EF4444";
+            return;
+        }
+
+        var recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = false;
+        recognition.lang = 'en-US';
+
+        function clickAction(type) {
+            try {
+                var doc = window.parent.document;
+                var buttons = Array.from(doc.querySelectorAll('button'));
+                for (var i = 0; i < buttons.length; i++) {
+                    var txt = (buttons[i].innerText || buttons[i].textContent || '').toLowerCase().trim();
+                    if (type === 'start' && (txt.includes('start assistant') || txt.includes('शुरू करें') || txt.includes('start'))) {
+                        buttons[i].click();
+                        return true;
+                    }
+                    if (type === 'stop' && (txt.includes('stop assistant') || txt.includes('रोकें') || txt.includes('stop'))) {
+                        buttons[i].click();
+                        return true;
+                    }
+                    if (type === 'resume' && (txt.includes('resume') || txt.includes('फिर से शुरू'))) {
+                        buttons[i].click();
+                        return true;
+                    }
+                }
+            } catch(e) {}
+            return false;
+        }
+
+        // Global Keyboard Accessibility (Space: Start/Pause, Esc: Stop, R: Resume)
+        try {
+            var targetDoc = window.parent.document || document;
+            targetDoc.addEventListener('keydown', function(e) {
+                var tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
+                if (tag === 'input' || tag === 'textarea') return;
+
+                if (e.code === 'Space' || e.key === ' ') {
+                    e.preventDefault();
+                    var el = document.getElementById('lastCmd');
+                    if (el) { el.innerText = '[Space] Start/Pause'; el.style.color = '#38BDF8'; }
+                    clickAction('start');
+                } else if (e.code === 'Escape' || e.key === 'Escape') {
+                    e.preventDefault();
+                    var el = document.getElementById('lastCmd');
+                    if (el) { el.innerText = '[Esc] Stop'; el.style.color = '#38BDF8'; }
+                    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+                    clickAction('stop');
+                } else if (e.key === 'r' || e.key === 'R') {
+                    var el = document.getElementById('lastCmd');
+                    if (el) { el.innerText = '[R] Resume'; el.style.color = '#38BDF8'; }
+                    clickAction('resume');
+                }
+            });
+        } catch(e) {}
+
+        recognition.onresult = function(event) {
+            var last = event.results.length - 1;
+            var text = event.results[last][0].transcript.trim().toLowerCase();
+            var cmdEl = document.getElementById('lastCmd');
+            if (cmdEl) cmdEl.innerText = '"' + text + '"';
+
+            // Check for STOP (English & Hindi)
+            if (
+                text.includes("stop") || text.includes("pause") || text.includes("halt") ||
+                text.includes("roko") || text.includes("band") || text.includes("chup") ||
+                text.includes("quiet") || text.includes("silent")
+            ) {
+                if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+                clickAction('stop');
+            }
+            // Check for START (English & Hindi)
+            else if (
+                text.includes("start") || text.includes("begin") || text.includes("scan") ||
+                text.includes("shuru") || text.includes("chalu") || text.includes("drishti")
+            ) {
+                clickAction('start');
+            }
+            // Check for RESUME (English & Hindi)
+            else if (text.includes("resume") || text.includes("continue") || text.includes("phir se")) {
+                clickAction('resume');
+            }
+        };
+
+        recognition.onerror = function(event) {
+            var err = event.error;
+            // Suppress network error cleanly - do not alarm user with "Mic error: network"
+            if (err === 'network') {
+                var s = document.getElementById('voiceStatus');
+                if (s) s.innerHTML = '🎙️ Offline Mode: Keyboard Controls <b>[Space] Start/Pause</b>, <b>[Esc] Stop</b> active.';
+                var b = document.getElementById('voiceBadge');
+                if (b) {
+                    b.innerText = "HOTKEYS READY";
+                    b.style.borderColor = "#6366F1";
+                    b.style.color = "#818CF8";
+                }
+                var p = document.getElementById('micPulse');
+                if (p) p.style.background = "#6366F1";
+            } else if (err === 'not-allowed') {
+                var s = document.getElementById('voiceStatus');
+                if (s) s.innerHTML = 'Mic blocked. Use keyboard controls: <b>[Space]</b> Start/Pause, <b>[Esc]</b> Stop.';
+            }
+        };
+
+        recognition.onend = function() {
+            // Auto restart to keep listening continuously
+            try { recognition.start(); } catch(e) {}
+        };
+
+        try { recognition.start(); } catch(e) {}
+    })();
+    </script>
+    """
+    components.html(js_listener, height=65)
 
 
 # -----------------------------------------------------------------------------
@@ -288,12 +564,19 @@ def render_audio_controls(text_to_speak: str, key_prefix: str = "audio"):
 # -----------------------------------------------------------------------------
 def render_sidebar():
     with st.sidebar:
-        # Brand Header
+        # Professional Brand Header
         st.markdown(
             f"""
-            <div style="text-align: center; padding: 0.5rem 0 1rem 0;">
-                <h1 style="font-size: 1.8rem; margin: 0; color: #6366F1;">👁️ {config.APP_NAME}</h1>
-                <p style="font-size: 0.95rem; color: #94A3B8; margin-top: 4px;">{config.APP_TAGLINE}</p>
+            <div style="padding: 0.75rem 0.5rem 1.25rem 0.5rem;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <span style="font-size: 2rem;">👁️</span>
+                    <div>
+                        <h2 style="font-size: 1.6rem; margin: 0; font-weight: 900; letter-spacing: 1px; color: #FFFFFF !important;">
+                            DRISHTI <span style="color: #818CF8;">AI</span>
+                        </h2>
+                        <p style="font-size: 0.85rem; color: #94A3B8 !important; margin: 0;">{config.APP_TAGLINE}</p>
+                    </div>
+                </div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -304,7 +587,7 @@ def render_sidebar():
         # Language Selection
         st.markdown("### 🌐 Language / भाषा")
         lang_choice = st.radio(
-            "Select Interface & Voice Language",
+            "Select Language",
             options=["English", "हिन्दी (Hindi)"],
             index=0 if st.session_state.language == "en" else 1,
             label_visibility="collapsed",
@@ -316,10 +599,10 @@ def render_sidebar():
         # Navigation Menu
         st.markdown("### 🧭 Navigation")
         nav_options = [
-            "Home Dashboard",
+            "Camera Assistant",
             "Describe My Surroundings",
             "Read Text (OCR)",
-            "Camera Assistant",
+            "Home Dashboard",
             "Voice Assistant",
             "Settings & Diagnostics",
             "About Drishti AI",
@@ -356,132 +639,245 @@ def render_sidebar():
 
         st.markdown("---")
 
-        # Quick System Readiness Check
+        # System Readiness Badges
         st.markdown("### 🔌 Offline Status")
         is_ollama_on, models, _ = vision.check_ollama_status(st.session_state.ollama_url)
         tess_status = ocr_reader.check_tesseract_status(st.session_state.custom_tesseract_path)
 
         ollama_badge = '<span class="status-badge badge-online">● Ollama: Ready</span>' if is_ollama_on else '<span class="status-badge badge-offline">○ Ollama: Offline</span>'
-        tess_badge = '<span class="status-badge badge-online">● OCR: Ready</span>' if tess_status["installed"] else '<span class="status-badge badge-warning">○ OCR: Not Found</span>'
+        ocr_badge = f'<span class="status-badge badge-online">● OCR: Ready ({tess_status.get("engine", "Active")})</span>' if tess_status["installed"] else '<span class="status-badge badge-warning">○ OCR: Not Found</span>'
 
-        st.markdown(f"{ollama_badge} {tess_badge}", unsafe_allow_html=True)
+        st.markdown(f"{ollama_badge} {ocr_badge}", unsafe_allow_html=True)
         st.caption(f"Active Model: `{st.session_state.model_name}`")
 
 
 render_sidebar()
 
 # -----------------------------------------------------------------------------
-# Section 1: Home Dashboard
+# Section 1: Camera Assistant (Real-Time Live Scanning & Snapshot Modes)
 # -----------------------------------------------------------------------------
-def render_home_dashboard():
-    st.markdown(f'<h1 class="drishti-h1">👁️ {config.APP_NAME}</h1>', unsafe_allow_html=True)
+def render_camera_assistant():
+    st.markdown('<h1 class="drishti-h1">🎥 Camera Assistant</h1>', unsafe_allow_html=True)
     st.markdown(
-        f'<p style="font-size: 1.25rem; color: #94A3B8; margin-top: -10px;">{config.APP_TAGLINE} — Offline Accessibility Assistant</p>',
+        '<p style="font-size: 1.15rem; color: #94A3B8;">Automatic real-time visual assistance with continuous camera scanning, OCR, and voice commands.</p>',
         unsafe_allow_html=True,
     )
 
-    # Critical Safety Disclaimer Banner
-    disclaimer = config.SAFETY_DISCLAIMER_HI if st.session_state.language == "hi" else config.SAFETY_DISCLAIMER_EN
-    st.markdown(f'<div class="safety-banner">{disclaimer}</div>', unsafe_allow_html=True)
+    tab_live, tab_snapshot = st.tabs(["🟢 Real-Time Live Assistant (Hands-Free)", "📸 Photo Snapshot Mode"])
 
-    # System Status & Diagnostic Summary Card
-    st.markdown('<div class="drishti-card">', unsafe_allow_html=True)
-    st.markdown('<h3 class="drishti-h3">🖥️ System Health & Local AI Readiness</h3>', unsafe_allow_html=True)
+    # -------------------------------------------------------------------------
+    # TAB 1: Real-Time Live Assistant (Continuous Background Scanning)
+    # -------------------------------------------------------------------------
+    with tab_live:
+        # Full-Duplex Voice Command Listener
+        render_voice_command_listener()
 
-    is_ollama_on, models, ollama_msg = vision.check_ollama_status(st.session_state.ollama_url)
-    tess_status = ocr_reader.check_tesseract_status(st.session_state.custom_tesseract_path)
-    voices_info = speech.speech_manager.get_installed_voices()
+        # Operational Status Indicator Card
+        state = live_assistant.live_assistant.get_state()
+        is_active = state["is_active"]
+        is_paused = state["is_paused"]
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        if is_ollama_on:
-            st.success(f"**Ollama AI:** Online ({len(models)} models)")
-            has_target = any(st.session_state.model_name.lower() in m.lower() for m in models)
-            if has_target:
-                st.caption(f"✅ Active model `{st.session_state.model_name}` loaded.")
+        # Status Badges
+        cam_badge = '<span class="status-badge badge-online">📷 Camera: Active</span>' if is_active else '<span class="status-badge">📷 Camera: Idle</span>'
+        scan_badge = '<span class="status-badge badge-online">🔄 Scanning: Active (every 2.5s)</span>' if is_active and not is_paused else ('<span class="status-badge badge-warning">🔄 Scanning: Paused</span>' if is_paused else '<span class="status-badge">🔄 Scanning: Idle</span>')
+        mic_badge = '<span class="status-badge badge-online">🎙️ Mic: Listening for Voice Commands</span>'
+
+        st.markdown(f'<div style="margin-bottom: 1rem;">{cam_badge} {scan_badge} {mic_badge}</div>', unsafe_allow_html=True)
+
+        # Main Control Buttons
+        c_btn1, c_btn2, c_btn3 = st.columns(3)
+
+        with c_btn1:
+            if st.button("▶️ Start Assistant (शुरू करें)", key="btn_live_start", use_container_width=True, type="primary"):
+                msg = live_assistant.live_assistant.start(
+                    camera_index=1,
+                    lang=st.session_state.language,
+                    scan_interval=st.session_state.live_scan_interval,
+                )
+                speak_text("Drishti live assistant started. Observing your surroundings.")
+                st.rerun()
+
+        with c_btn2:
+            st.markdown('<div class="btn-stop">', unsafe_allow_html=True)
+            if st.button("⏹️ Stop Assistant (रोकें)", key="btn_live_stop", use_container_width=True):
+                msg = live_assistant.live_assistant.stop()
+                stop_all_speech()
+                st.info("Assistant stopped. Camera scanning and speech halted.")
+                st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        with c_btn3:
+            st.markdown('<div class="btn-resume">', unsafe_allow_html=True)
+            if st.button("⏯️ Resume Scanning (फिर से शुरू)", key="btn_live_resume", use_container_width=True):
+                msg = live_assistant.live_assistant.resume()
+                speak_text("Scanning resumed.")
+                st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # Real-time Visual and Auditory Dashboard
+        col_feed, col_info = st.columns([1, 1.2])
+
+        with col_feed:
+            st.markdown('<div class="drishti-card">', unsafe_allow_html=True)
+            st.markdown('<h3 class="drishti-h3">📹 Live Camera View</h3>', unsafe_allow_html=True)
+            if is_active and state["latest_frame"] is not None:
+                st.image(state["latest_frame"], caption=f"Live Feed ({state['scanning_status']})", use_container_width=True)
             else:
-                st.warning(f"⚠️ `{st.session_state.model_name}` not in list. Available: {', '.join(models[:3]) or 'None'}")
-        else:
-            st.error(f"**Ollama AI:** Offline\n\nRun `ollama serve` in terminal.")
+                st.markdown(
+                    """
+                    <div style="background: #0B0F19; border: 2px dashed #334155; border-radius: 12px; padding: 3rem 1rem; text-align: center; color: #94A3B8;">
+                        <span style="font-size: 3rem;">📷</span>
+                        <p style="margin-top: 10px; font-weight: 600;">Camera is currently stopped.</p>
+                        <p style="font-size: 0.9rem;">Click <b>Start Assistant</b> or say <b>"Drishti, start"</b> to begin live scanning.</p>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            st.markdown("</div>", unsafe_allow_html=True)
 
-    with col2:
-        if tess_status["installed"]:
-            st.success(f"**Tesseract OCR:** Active (v{tess_status['version']})")
-            hin_state = "✅ Hindi enabled" if tess_status["has_hindi"] else "⚠️ English only (hin missing)"
-            st.caption(hin_state)
-        else:
-            st.warning("**Tesseract OCR:** Not installed / not in PATH.")
-            st.caption("Read Text (OCR) requires Tesseract. Visit Settings for guide.")
+        with col_info:
+            # Currently Detected Objects Pills
+            st.markdown('<div class="drishti-card">', unsafe_allow_html=True)
+            st.markdown('<h3 class="drishti-h3">🎯 Currently Detected Objects</h3>', unsafe_allow_html=True)
+            detected = state["detected_objects"]
+            if detected:
+                pills_html = "".join([f'<span class="object-pill">📦 {obj}</span>' for obj in detected])
+                st.markdown(f'<div style="margin: 0.5rem 0;">{pills_html}</div>', unsafe_allow_html=True)
+            else:
+                st.caption("Waiting for active objects in frame...")
 
-    with col3:
-        if voices_info["available"]:
-            st.success(f"**TTS Speech:** Ready ({len(voices_info['voices'])} voices)")
-            hin_voice_note = "✅ Hindi voice detected" if voices_info["has_hindi"] else "ℹ️ Standard SAPI voice"
-            st.caption(hin_voice_note)
-        else:
-            st.error("**TTS Speech:** Offline engine unavailable.")
+            # Latest Spoken Description Card
+            st.markdown('<h3 class="drishti-h3" style="margin-top: 1.25rem;">🗣️ Latest Spoken Description</h3>', unsafe_allow_html=True)
+            announcement = state["last_announced"] or state["latest_description"]
+            if announcement:
+                st.markdown(f'<div class="result-text-box">{announcement}</div>', unsafe_allow_html=True)
+                render_audio_controls(announcement, key_prefix="live_announcement_ctrl")
 
-    st.markdown("</div>", unsafe_allow_html=True)
+                # Auto-speak in browser immediately when new announcement arrives during live scanning
+                if is_active and announcement != st.session_state.get("last_auto_spoken_live"):
+                    st.session_state["last_auto_spoken_live"] = announcement
+                    trigger_browser_speech(announcement, lang=st.session_state.language)
+            else:
+                st.info("No descriptions generated yet. Start the assistant to receive live spoken updates.")
 
-    # Quick Action Cards
-    st.markdown('<h2 class="drishti-h2">🚀 Quick Assistive Actions</h2>', unsafe_allow_html=True)
-    q1, q2 = st.columns(2)
-    with q1:
-        st.markdown(
-            """
-            <div class="drishti-card-highlight">
-                <h3 style="margin-top:0;">📷 Describe My Surroundings</h3>
-                <p>Upload a photo or capture an image of your environment. Gemma 4 will describe objects, colors, obstacles, and spatial positioning in simple language.</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        if st.button("Open Scene Description →", key="btn_go_describe", use_container_width=True):
-            st.session_state.active_section = "Describe My Surroundings"
+            # Visible Text / Signboard OCR
+            if state["latest_ocr"]:
+                st.markdown('<h3 class="drishti-h3" style="margin-top: 1rem;">📄 Detected Text / Signboard</h3>', unsafe_allow_html=True)
+                st.markdown(f'<div class="drishti-card-highlight" style="padding: 1rem;">{state["latest_ocr"]}</div>', unsafe_allow_html=True)
+
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        # Scanning Frequency Tuning
+        with st.expander("⚙️ Live Scanning Settings & Interval"):
+            st.session_state.live_scan_interval = st.slider(
+                "Scan Interval (Seconds between AI analysis passes):",
+                min_value=float(config.MIN_SCAN_INTERVAL),
+                max_value=float(config.MAX_SCAN_INTERVAL),
+                value=float(st.session_state.live_scan_interval),
+                step=0.5,
+                help="2.5 seconds is optimal for 8 GB RAM and CPU inference.",
+            )
+
+        # Auto-refresh loop when active to update live frames and announcements
+        if is_active:
+            time.sleep(1.0)
             st.rerun()
 
-    with q2:
-        st.markdown(
-            """
-            <div class="drishti-card-highlight">
-                <h3 style="margin-top:0;">📖 Read Text (OCR)</h3>
-                <p>Extract and hear text from street signs, medicine packaging, notices, labels, and printed documents with support for both Hindi and English.</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        if st.button("Open Text Reader (OCR) →", key="btn_go_ocr", use_container_width=True):
-            st.session_state.active_section = "Read Text (OCR)"
-            st.rerun()
+    # -------------------------------------------------------------------------
+    # TAB 2: Photo Snapshot Mode (Existing Single Photo Capture Preserved)
+    # -------------------------------------------------------------------------
+    with tab_snapshot:
+        col_t1, col_t2 = st.columns([1.6, 1])
+        with col_t1:
+            st.session_state.auto_describe_camera = st.toggle(
+                "⚡ **Auto-Describe & Speak on Capture (फोटो खींचते ही अपने आप बोलें)**",
+                value=st.session_state.auto_describe_camera,
+                help="When enabled, taking a photo automatically analyzes the scene and speaks the description aloud immediately!",
+            )
+        with col_t2:
+            cam_lang = st.radio(
+                "Snapshot Audio Language:",
+                options=["English", "हिन्दी (Hindi)"],
+                index=0 if st.session_state.language == "en" else 1,
+                horizontal=True,
+                key="snapshot_lang_selector",
+            )
+            selected_lang_code = "en" if "English" in cam_lang else "hi"
+            st.session_state.language = selected_lang_code
 
-    q3, q4 = st.columns(2)
-    with q3:
-        st.markdown(
-            """
-            <div class="drishti-card">
-                <h3 style="margin-top:0;">🎥 Camera Assistant</h3>
-                <p>Use your computer webcam or USB camera to capture snapshots in real time and receive instant auditory feedback.</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        if st.button("Launch Camera Assistant →", key="btn_go_camera", use_container_width=True):
-            st.session_state.active_section = "Camera Assistant"
-            st.rerun()
+        captured_frame = None
 
-    with q4:
-        st.markdown(
-            """
-            <div class="drishti-card">
-                <h3 style="margin-top:0;">🔊 Voice Assistant & Controls</h3>
-                <p>Test your installed Windows voices, adjust speech rate, replay your last visual description, or synthesize any custom message.</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        if st.button("Open Voice Assistant →", key="btn_go_voice", use_container_width=True):
-            st.session_state.active_section = "Voice Assistant"
-            st.rerun()
+        cam_file = st.camera_input("Take a photo using your webcam (फोटो खींचें)", key="st_webcam_input_snap")
+        if cam_file:
+            captured_frame = camera.convert_streamlit_camera_file(cam_file)
+
+        if cam_file and captured_frame and st.session_state.auto_describe_camera:
+            cam_bytes = cam_file.getvalue()
+            current_hash = hashlib.md5(cam_bytes).hexdigest()
+
+            if st.session_state.last_processed_cam_hash != current_hash:
+                st.session_state.last_processed_cam_hash = current_hash
+                with st.spinner("🤖 Drishti AI is analyzing your surroundings..."):
+                    res = vision.describe_scene(
+                        image_input=captured_frame,
+                        language=st.session_state.language,
+                        model_name=st.session_state.model_name,
+                        ollama_url=st.session_state.ollama_url,
+                    )
+                    st.session_state.last_description_result = res
+                    if res["success"]:
+                        speak_text(res["description"])
+
+        if captured_frame:
+            st.markdown('<div class="drishti-card-highlight">', unsafe_allow_html=True)
+            st.markdown('<h3 class="drishti-h3">⚡ Assistive Actions</h3>', unsafe_allow_html=True)
+
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("🔍 Describe What Camera Sees (दृश्य समझें)", key="btn_cam_describe_snap", use_container_width=True):
+                    with st.spinner("Analyzing camera image with local AI..."):
+                        res = vision.describe_scene(
+                            image_input=captured_frame,
+                            language=st.session_state.language,
+                            model_name=st.session_state.model_name,
+                            ollama_url=st.session_state.ollama_url,
+                        )
+                        st.session_state.last_description_result = res
+                        if res["success"]:
+                            speak_text(res["description"])
+                            st.success("Analysis complete! Audio is playing.")
+                        else:
+                            st.error(f"Analysis error: {res['error']}")
+
+            with c2:
+                if st.button("📖 Read Text in Front of Camera (पाठ पढ़ें)", key="btn_cam_ocr_snap", use_container_width=True):
+                    with st.spinner("Reading visible text with OCR..."):
+                        res = ocr_reader.extract_text(
+                            image_input=captured_frame,
+                            language_choice="eng+hin",
+                            custom_tesseract_path=st.session_state.custom_tesseract_path,
+                        )
+                        st.session_state.last_ocr_result = res
+                        if res["success"] and res["text"]:
+                            speak_text(res["text"])
+                            st.success("Text recognized and spoken!")
+                        else:
+                            st.warning("No readable text detected in current frame.")
+
+            if st.session_state.last_description_result and st.session_state.last_description_result.get("success"):
+                desc = st.session_state.last_description_result["description"]
+                model = st.session_state.last_description_result.get("model_used", config.DEFAULT_MODEL_NAME)
+                st.markdown(f'<h2 class="drishti-h2">🗣️ Scene Description ({model})</h2>', unsafe_allow_html=True)
+                st.markdown(f'<div class="result-text-box">{desc}</div>', unsafe_allow_html=True)
+                render_audio_controls(desc, key_prefix="cam_desc_snap")
+
+            if st.session_state.last_ocr_result and st.session_state.last_ocr_result.get("success") and st.session_state.last_ocr_result.get("text"):
+                ocr_txt = st.session_state.last_ocr_result["text"]
+                st.markdown('<h2 class="drishti-h2">📄 Visible Text Content</h2>', unsafe_allow_html=True)
+                st.markdown(f'<div class="result-text-box">{ocr_txt}</div>', unsafe_allow_html=True)
+                render_audio_controls(ocr_txt, key_prefix="cam_ocr_snap")
+
+            st.markdown("</div>", unsafe_allow_html=True)
 
 
 # -----------------------------------------------------------------------------
@@ -496,9 +892,7 @@ def render_describe_surroundings():
         unsafe_allow_html=True,
     )
 
-    # Input method selection
     tab_upload, tab_sample = st.tabs(["📁 Upload Image (चित्र अपलोड करें)", "🖼️ Use Sample Test Image"])
-
     active_image = None
     image_source_label = ""
 
@@ -506,7 +900,6 @@ def render_describe_surroundings():
         uploaded_file = st.file_uploader(
             "Upload an image (JPG, PNG, WEBP, BMP)",
             type=config.SUPPORTED_IMAGE_TYPES,
-            help="Select an image file from your computer.",
             key="surroundings_upload",
         )
         if uploaded_file:
@@ -517,7 +910,6 @@ def render_describe_surroundings():
                 st.error(f"Failed to read image file: {str(e)}")
 
     with tab_sample:
-        # Ensure sample images exist
         sample_paths = sample_images_generator.generate_sample_images()
         sample_options = [p.name for p in sample_paths if p.exists()]
         if sample_options:
@@ -530,8 +922,6 @@ def render_describe_surroundings():
             if sample_file_path.exists():
                 active_image = Image.open(sample_file_path)
                 image_source_label = f"Sample: {selected_sample}"
-        else:
-            st.info("No sample images found.")
 
     if active_image is not None:
         col_img, col_ctrl = st.columns([1, 1.2])
@@ -543,9 +933,8 @@ def render_describe_surroundings():
 
         with col_ctrl:
             st.markdown('<div class="drishti-card">', unsafe_allow_html=True)
-            st.markdown('<h3 class="drishti-h3">⚙️ Analysis Options</h3>', unsafe_allow_html=True)
+            st.markdown('<h3 class="drishti-h3">⚙️ Options</h3>', unsafe_allow_html=True)
 
-            # Language selection for this specific run
             analysis_lang = st.radio(
                 "Description Language / भाषा:",
                 options=["English", "हिन्दी (Hindi)"],
@@ -555,7 +944,6 @@ def render_describe_surroundings():
             )
             selected_lang_code = "en" if "English" in analysis_lang else "hi"
 
-            # Preset focal point options
             focus_preset = st.selectbox(
                 "Focus Area (वैकल्पिक फोकस):",
                 options=[
@@ -573,7 +961,7 @@ def render_describe_surroundings():
                     "Focus specifically on ground terrain, floor obstacles, elevation changes, "
                     "doors, stairs, and walking hazards. Describe their exact relative positions."
                     if selected_lang_code == "en"
-                    else "विशेष रूप से जमीन की सतह, फर्श की बाधाओं, दरवाजों, सीढ़ियों और पैदल चलने के खतरों पर ध्यान दें। उनकी स्थिति बताएं।"
+                    else "विशेष रूप से जमीन की सतह, फर्श की बाधाओं, दरवाजों, सीढ़ियों और पैदल चलने के खतरों पर ध्यान दें।"
                 )
             elif "Signboards" in focus_preset:
                 custom_prompt = (
@@ -582,10 +970,9 @@ def render_describe_surroundings():
                     else "दृश्य में दिखाई देने वाले किसी भी नोटिस, साइनबोर्ड, लेबल या टेक्स्ट को पढ़कर समझाएं।"
                 )
 
-            # Large Accessible Action Button
             btn_label = "🔍 दृश्य का विश्लेषण करें (Analyze Scene)" if selected_lang_code == "hi" else "🔍 Analyze Scene with AI"
             if st.button(btn_label, key="btn_run_vision", use_container_width=True):
-                with st.spinner("🤖 Drishti AI is analyzing the scene offline... Please wait."):
+                with st.spinner("🤖 Drishti AI is analyzing the scene offline..."):
                     result = vision.describe_scene(
                         image_input=active_image,
                         language=selected_lang_code,
@@ -594,14 +981,11 @@ def render_describe_surroundings():
                         custom_prompt=custom_prompt,
                     )
                     st.session_state.last_description_result = result
-
-                    # Auto-speak if enabled
-                    if result["success"] and st.session_state.auto_speak:
+                    if result["success"]:
                         speak_text(result["description"])
 
             st.markdown("</div>", unsafe_allow_html=True)
 
-        # Display Results
         if st.session_state.last_description_result:
             res = st.session_state.last_description_result
             st.markdown("---")
@@ -616,23 +1000,11 @@ def render_describe_surroundings():
                     unsafe_allow_html=True,
                 )
                 st.caption(f"⚡ Inferred locally in {res['duration_seconds']}s • 100% Offline Privacy Guarantee")
-
-                # Audio Controls
                 render_audio_controls(res["description"], key_prefix="vision_res")
                 st.markdown("</div>", unsafe_allow_html=True)
-
-                # Safety Reminder
                 st.info(res["disclaimer"])
             else:
                 st.error(f"❌ Analysis failed: {res['error']}")
-                st.markdown(
-                    """
-                    **Troubleshooting Tips:**
-                    1. Ensure Ollama is running (`ollama serve`).
-                    2. Check if the model is installed (`ollama pull gemma4:e2b`).
-                    3. If `gemma4:e2b` does not support vision weights on your setup, switch to `llava` in Settings.
-                    """
-                )
     else:
         st.info("👆 Please upload an image or choose a sample image above to start.")
 
@@ -649,13 +1021,11 @@ def render_read_text_ocr():
         unsafe_allow_html=True,
     )
 
-    # Check Tesseract status
     tess_status = ocr_reader.check_tesseract_status(st.session_state.custom_tesseract_path)
-    if not tess_status["installed"]:
-        st.warning(
-            f"⚠️ **Tesseract OCR is not detected:** {tess_status['message']}\n\n"
-            "You can configure the exact path to `tesseract.exe` in the **Settings & Diagnostics** tab."
-        )
+    if tess_status["installed"]:
+        st.success(f"✅ **OCR Active:** {tess_status['message']}")
+    else:
+        st.warning(f"⚠️ {tess_status['message']}")
 
     tab_upload, tab_sample = st.tabs(["📁 Upload Image / Document", "🖼️ Use Sample Test Image"])
     active_image = None
@@ -676,7 +1046,6 @@ def render_read_text_ocr():
 
     with tab_sample:
         sample_paths = sample_images_generator.generate_sample_images()
-        # Prefer signboard or medicine label
         sample_options = [p.name for p in sample_paths if p.exists()]
         if sample_options:
             selected_sample = st.selectbox(
@@ -704,21 +1073,11 @@ def render_read_text_ocr():
 
             ocr_lang_option = st.selectbox(
                 "OCR Language Target:",
-                options=[
-                    "English + Hindi (eng+hin)",
-                    "English Only (eng)",
-                    "Hindi Only (hin)",
-                ],
+                options=["English + Hindi (eng+hin)", "English Only (eng)", "Hindi Only (hin)"],
                 index=0,
                 key="ocr_lang_target",
             )
-
-            code_map = {
-                "English + Hindi (eng+hin)": "eng+hin",
-                "English Only (eng)": "eng",
-                "Hindi Only (hin)": "hin",
-            }
-            lang_code = code_map[ocr_lang_option]
+            lang_code = "eng+hin" if "Hindi" in ocr_lang_option and "English" in ocr_lang_option else ("hin" if "Hindi" in ocr_lang_option else "eng")
 
             apply_prep = st.checkbox("Apply Contrast & Denoising Preprocessing", value=True)
             prep_method = st.selectbox(
@@ -729,7 +1088,7 @@ def render_read_text_ocr():
             prep_key = prep_method.split()[0]
 
             if st.button("📖 Extract and Read Text (पाठ निकालें)", key="btn_run_ocr", use_container_width=True):
-                with st.spinner("⏳ Extracting text using Tesseract OCR..."):
+                with st.spinner("⏳ Extracting text with OCR..."):
                     result = ocr_reader.extract_text(
                         image_input=active_image,
                         language_choice=lang_code,
@@ -739,12 +1098,11 @@ def render_read_text_ocr():
                     )
                     st.session_state.last_ocr_result = result
 
-                    if result["success"] and result["text"] and st.session_state.auto_speak:
+                    if result["success"] and result["text"]:
                         speak_text(result["text"])
 
             st.markdown("</div>", unsafe_allow_html=True)
 
-        # Display Extracted Text
         if st.session_state.last_ocr_result:
             res = st.session_state.last_ocr_result
             st.markdown("---")
@@ -756,24 +1114,18 @@ def render_read_text_ocr():
                     st.warning(res["warning"])
 
                 if res["text"]:
-                    st.markdown(
-                        f'<div class="result-text-box">{res["text"]}</div>',
-                        unsafe_allow_html=True,
-                    )
+                    st.markdown(f'<div class="result-text-box">{res["text"]}</div>', unsafe_allow_html=True)
                     st.caption(
-                        f"📊 Words: {res['word_count']} | Language Engine: `{res['language_used']}` | "
-                        f"OCR Confidence: {res['confidence']}%"
+                        f"📊 Words: {res['word_count']} | Engine: `{res['language_used']}` | "
+                        f"Confidence: {res['confidence']}%"
                     )
-
-                    # Spoken Controls
                     render_audio_controls(res["text"], key_prefix="ocr_res")
                 else:
-                    st.info("No text characters were recognized in this image. Try adjusting the preprocessing method.")
+                    st.info("No text characters were recognized in this image.")
 
-                # If preprocessed image is available, display comparison
                 if res.get("preprocessed_image") and apply_prep:
                     with st.expander("🔍 View Preprocessed Image (OpenCV Filter Output)"):
-                        st.image(res["preprocessed_image"], caption="Denoised & Thresholded OCR View", width=450)
+                        st.image(res["preprocessed_image"], caption="Denoised OCR View", width=450)
 
                 st.markdown("</div>", unsafe_allow_html=True)
             else:
@@ -783,98 +1135,70 @@ def render_read_text_ocr():
 
 
 # -----------------------------------------------------------------------------
-# Section 4: Camera Assistant
+# Section 4: Home Dashboard
 # -----------------------------------------------------------------------------
-def render_camera_assistant():
-    st.markdown('<h1 class="drishti-h1">🎥 Camera Assistant</h1>', unsafe_allow_html=True)
+def render_home_dashboard():
+    st.markdown(f'<h1 class="drishti-h1">👁️ {config.APP_NAME}</h1>', unsafe_allow_html=True)
     st.markdown(
-        '<p style="font-size: 1.15rem; color: #94A3B8;">Capture live snapshots from your laptop webcam or USB camera for immediate voice feedback.</p>',
+        f'<p style="font-size: 1.25rem; color: #94A3B8; margin-top: -10px;">{config.APP_TAGLINE} — Offline Accessibility Assistant</p>',
         unsafe_allow_html=True,
     )
 
-    mode = st.radio(
-        "Choose Camera Interface:",
-        options=["Streamlit WebRTC Camera (Recommended)", "OpenCV Direct Hardware Snapshot"],
-        horizontal=True,
-        key="camera_mode_radio",
-    )
+    disclaimer = config.SAFETY_DISCLAIMER_HI if st.session_state.language == "hi" else config.SAFETY_DISCLAIMER_EN
+    st.markdown(f'<div class="safety-banner">{disclaimer}</div>', unsafe_allow_html=True)
 
-    captured_frame = None
+    st.markdown('<div class="drishti-card">', unsafe_allow_html=True)
+    st.markdown('<h3 class="drishti-h3">🖥️ System Health & Local AI Readiness</h3>', unsafe_allow_html=True)
 
-    if "Streamlit" in mode:
-        st.markdown('<div class="drishti-card">', unsafe_allow_html=True)
-        cam_file = st.camera_input("Take a photo using your webcam", key="st_webcam_input")
-        if cam_file:
-            captured_frame = camera.convert_streamlit_camera_file(cam_file)
-        st.markdown("</div>", unsafe_allow_html=True)
-    else:
-        # OpenCV Direct Hardware Capture
-        st.markdown('<div class="drishti-card">', unsafe_allow_html=True)
-        col_dev, col_btn = st.columns([1, 1])
-        with col_dev:
-            cam_index = st.number_input("Camera Device Index:", min_value=0, max_value=4, value=0, step=1)
-        with col_btn:
-            st.write("")
-            st.write("")
-            if st.button("📸 Capture OpenCV Frame", key="btn_cv_capture", use_container_width=True):
-                with st.spinner("Capturing frame from camera..."):
-                    cap_result = camera.capture_frame_from_camera(camera_index=cam_index)
-                    if cap_result["success"]:
-                        st.session_state["cv_captured_image"] = cap_result["image"]
-                        st.success(f"Captured {cap_result['resolution'][0]}x{cap_result['resolution'][1]} frame!")
-                    else:
-                        st.error(f"Camera capture failed: {cap_result['error']}")
+    is_ollama_on, models, ollama_msg = vision.check_ollama_status(st.session_state.ollama_url)
+    tess_status = ocr_reader.check_tesseract_status(st.session_state.custom_tesseract_path)
 
-        if "cv_captured_image" in st.session_state and st.session_state["cv_captured_image"]:
-            captured_frame = st.session_state["cv_captured_image"]
-            st.image(captured_frame, caption="Captured Frame Preview", width=500)
+    col1, col2 = st.columns(2)
+    with col1:
+        if is_ollama_on:
+            st.success(f"**Ollama AI:** Online ({len(models)} models: {', '.join(models)})")
+            st.caption(f"✅ Active model `{st.session_state.model_name}` ready.")
+        else:
+            st.error(f"**Ollama AI:** Offline. Run `ollama serve` in terminal.")
 
-        st.markdown("</div>", unsafe_allow_html=True)
+    with col2:
+        if tess_status["installed"]:
+            st.success(f"**OCR Engine:** Ready ({tess_status['engine']})")
+            st.caption("✅ English and Hindi text recognition supported.")
+        else:
+            st.warning("**OCR:** Engine not configured.")
 
-    # If a frame was captured, offer immediate assistive actions
-    if captured_frame:
-        st.markdown('<div class="drishti-card-highlight">', unsafe_allow_html=True)
-        st.markdown('<h3 class="drishti-h3">⚡ Instant Assistive Actions</h3>', unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("🔍 Describe What Camera Sees", key="btn_cam_describe", use_container_width=True):
-                with st.spinner("Analyzing camera image with local AI..."):
-                    res = vision.describe_scene(
-                        image_input=captured_frame,
-                        language=st.session_state.language,
-                        model_name=st.session_state.model_name,
-                        ollama_url=st.session_state.ollama_url,
-                    )
-                    st.session_state.last_description_result = res
-                    if res["success"]:
-                        speak_text(res["description"])
-                        st.success("Analysis complete! Audio is playing.")
-                    else:
-                        st.error(f"Analysis error: {res['error']}")
+    st.markdown('<h2 class="drishti-h2">🚀 Quick Assistive Actions</h2>', unsafe_allow_html=True)
+    q1, q2 = st.columns(2)
+    with q1:
+        st.markdown(
+            """
+            <div class="drishti-card-highlight">
+                <h3 style="margin-top:0;">🎥 Camera Assistant</h3>
+                <p>Live camera scanning with real-time automatic spoken descriptions, obstacle awareness, and voice commands.</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if st.button("Launch Camera Assistant →", key="btn_go_camera_dash", use_container_width=True):
+            st.session_state.active_section = "Camera Assistant"
+            st.rerun()
 
-        with c2:
-            if st.button("📖 Read Text in Front of Camera", key="btn_cam_ocr", use_container_width=True):
-                with st.spinner("Reading visible text with OCR..."):
-                    res = ocr_reader.extract_text(
-                        image_input=captured_frame,
-                        language_choice="eng+hin",
-                        custom_tesseract_path=st.session_state.custom_tesseract_path,
-                    )
-                    st.session_state.last_ocr_result = res
-                    if res["success"] and res["text"]:
-                        speak_text(res["text"])
-                        st.success("Extracted text recognized and spoken.")
-                    else:
-                        st.warning("No readable text detected in current frame.")
-
-        # Display result if available
-        if st.session_state.last_description_result and st.session_state.last_description_result.get("success"):
-            desc = st.session_state.last_description_result["description"]
-            st.markdown(f'<div class="result-text-box">{desc}</div>', unsafe_allow_html=True)
-            render_audio_controls(desc, key_prefix="cam_desc_res")
-
-        st.markdown("</div>", unsafe_allow_html=True)
+    with q2:
+        st.markdown(
+            """
+            <div class="drishti-card-highlight">
+                <h3 style="margin-top:0;">📖 Read Text (OCR)</h3>
+                <p>Extract and hear text from street signs, medicine packaging, notices, and documents.</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if st.button("Open Text Reader (OCR) →", key="btn_go_ocr_dash", use_container_width=True):
+            st.session_state.active_section = "Read Text (OCR)"
+            st.rerun()
 
 
 # -----------------------------------------------------------------------------
@@ -883,17 +1207,15 @@ def render_camera_assistant():
 def render_voice_assistant():
     st.markdown('<h1 class="drishti-h1">🔊 Voice Assistant & Audio Center</h1>', unsafe_allow_html=True)
     st.markdown(
-        '<p style="font-size: 1.15rem; color: #94A3B8;">100% offline text-to-speech powered by pyttsx3 and Windows SAPI5 audio engines.</p>',
+        '<p style="font-size: 1.15rem; color: #94A3B8;">Auditory synthesis powered by Web Speech API and offline TTS engines.</p>',
         unsafe_allow_html=True,
     )
-
-    voices_info = speech.speech_manager.get_installed_voices()
 
     col_ctrl, col_test = st.columns([1, 1.2])
 
     with col_ctrl:
         st.markdown('<div class="drishti-card">', unsafe_allow_html=True)
-        st.markdown('<h3 class="drishti-h3">🎛️ Speech Parameters</h3>', unsafe_allow_html=True)
+        st.markdown('<h3 class="drishti-h3">🎛️ Audio Controls</h3>', unsafe_allow_html=True)
 
         st.session_state.speech_rate = st.slider(
             "Speech Rate (Words Per Minute):",
@@ -901,7 +1223,6 @@ def render_voice_assistant():
             max_value=260,
             value=st.session_state.speech_rate,
             step=5,
-            help="160 WPM is standard natural speaking speed.",
         )
 
         st.session_state.speech_volume = st.slider(
@@ -912,20 +1233,7 @@ def render_voice_assistant():
             step=0.05,
         )
 
-        # Voice Selector
-        if voices_info["available"] and voices_info["voices"]:
-            voice_options = {v["name"]: v["id"] for v in voices_info["voices"]}
-            selected_voice_name = st.selectbox(
-                "Active Windows Voice:",
-                options=list(voice_options.keys()),
-                index=0,
-            )
-            st.session_state.selected_voice_id = voice_options[selected_voice_name]
-        else:
-            st.error("No Windows SAPI voices detected.")
-
         st.markdown("---")
-        st.markdown('<h4 class="drishti-h4">🔁 Quick Response Recall</h4>', unsafe_allow_html=True)
         last_spoken = st.session_state.last_spoken_text
         if last_spoken:
             st.caption(f"**Last Spoken:** _{last_spoken[:120]}..._")
@@ -935,7 +1243,7 @@ def render_voice_assistant():
                     speak_text(last_spoken)
             with c_stp:
                 if st.button("⏹️ Stop Playback", key="btn_stop_voice_page", use_container_width=True):
-                    speech.speech_manager.stop()
+                    stop_all_speech()
         else:
             st.info("No prior response saved in session memory yet.")
 
@@ -952,14 +1260,8 @@ def render_voice_assistant():
             "Emergency exit door located directly in front. Keep the pathway clear.",
         ]
         chosen_sample = st.selectbox("Or choose a sample phrase:", options=["(Custom input)"] + sample_prompts)
-
         default_txt = "" if chosen_sample == "(Custom input)" else chosen_sample
-        user_speech_input = st.text_area(
-            "Enter text to speak aloud:",
-            value=default_txt,
-            height=120,
-            key="voice_test_input",
-        )
+        user_speech_input = st.text_area("Enter text to speak aloud:", value=default_txt, height=120, key="voice_test_input")
 
         if st.button("🔊 Speak Text (बोलें)", key="btn_test_speak", use_container_width=True):
             if user_speech_input.strip():
@@ -967,31 +1269,7 @@ def render_voice_assistant():
             else:
                 st.warning("Please type some text to speak.")
 
-        if st.session_state.last_audio_file and os.path.exists(st.session_state.last_audio_file):
-            st.markdown("---")
-            st.caption("🎧 Generated Audio Player:")
-            with open(st.session_state.last_audio_file, "rb") as f:
-                st.audio(f.read(), format="audio/wav")
-
         st.markdown("</div>", unsafe_allow_html=True)
-
-    # Hindi Voice Installation Guide Card
-    st.markdown('<div class="drishti-card">', unsafe_allow_html=True)
-    st.markdown('<h3 class="drishti-h3">🇮🇳 Hindi Voice Guide for Windows</h3>', unsafe_allow_html=True)
-    if voices_info["has_hindi"]:
-        st.success(f"✅ Dedicated Hindi voice detected: {', '.join([v['name'] for v in voices_info['hindi_voices']])}")
-    else:
-        st.info(
-            """
-            **How to install the official Hindi Speech Voice on Windows 10/11:**
-            1. Open **Windows Settings** (`Win + I`).
-            2. Navigate to **Time & Language** ➔ **Speech**.
-            3. Under **Manage voices**, click **Add voices**.
-            4. Search for **Hindi (India)**, select it, and click **Add**.
-            5. Once installed, restart Drishti AI and the Hindi voice (e.g. *Microsoft Kalpana* or *Heera*) will automatically appear here!
-            """
-        )
-    st.markdown("</div>", unsafe_allow_html=True)
 
 
 # -----------------------------------------------------------------------------
@@ -999,38 +1277,22 @@ def render_voice_assistant():
 # -----------------------------------------------------------------------------
 def render_settings():
     st.markdown('<h1 class="drishti-h1">⚙️ Settings & System Diagnostics</h1>', unsafe_allow_html=True)
-    st.markdown(
-        '<p style="font-size: 1.15rem; color: #94A3B8;">Configure local AI endpoints, verify Tesseract installation, and audit system resources.</p>',
-        unsafe_allow_html=True,
-    )
 
     col1, col2 = st.columns(2)
-
     with col1:
         st.markdown('<div class="drishti-card">', unsafe_allow_html=True)
         st.markdown('<h3 class="drishti-h3">🤖 Ollama Model Configuration</h3>', unsafe_allow_html=True)
 
-        new_ollama_url = st.text_input(
-            "Ollama Base URL:",
-            value=st.session_state.ollama_url,
-            help="Default is http://localhost:11434",
-        )
-        if new_ollama_url != st.session_state.ollama_url:
-            st.session_state.ollama_url = new_ollama_url
-
-        # Check installed models
+        st.session_state.ollama_url = st.text_input("Ollama Base URL:", value=st.session_state.ollama_url)
         is_on, installed_models, msg = vision.check_ollama_status(st.session_state.ollama_url)
         st.caption(msg)
 
         all_model_options = list(set([st.session_state.model_name] + installed_models + config.SUPPORTED_VISION_MODELS))
-        selected_model = st.selectbox(
+        st.session_state.model_name = st.selectbox(
             "Selected Vision Model:",
             options=all_model_options,
-            index=all_model_options.index(st.session_state.model_name)
-            if st.session_state.model_name in all_model_options
-            else 0,
+            index=all_model_options.index(st.session_state.model_name) if st.session_state.model_name in all_model_options else 0,
         )
-        st.session_state.model_name = selected_model
 
         if st.button("🔄 Test Ollama Connection", key="btn_test_ollama", use_container_width=True):
             test_on, models_found, test_msg = vision.check_ollama_status(st.session_state.ollama_url)
@@ -1043,109 +1305,41 @@ def render_settings():
 
     with col2:
         st.markdown('<div class="drishti-card">', unsafe_allow_html=True)
-        st.markdown('<h3 class="drishti-h3">🔍 Tesseract OCR Configuration</h3>', unsafe_allow_html=True)
+        st.markdown('<h3 class="drishti-h3">🔍 OCR Configuration</h3>', unsafe_allow_html=True)
+        status = ocr_reader.check_tesseract_status(st.session_state.custom_tesseract_path)
+        if status["installed"]:
+            st.success(f"✅ {status['message']}")
+        else:
+            st.warning(f"⚠️ {status['message']}")
 
-        found_path, auto_path = ocr_reader.find_tesseract_binary()
-        st.caption(f"Auto-detected path: `{auto_path or 'Not found in standard paths'}`")
-
-        custom_path_input = st.text_input(
-            "Custom Tesseract.exe Path:",
+        st.session_state.custom_tesseract_path = st.text_input(
+            "Custom Tesseract.exe Path (Optional):",
             value=st.session_state.custom_tesseract_path,
             placeholder=r"C:\Program Files\Tesseract-OCR\tesseract.exe",
-            help="Leave empty to use auto-detected path.",
-        )
-        st.session_state.custom_tesseract_path = custom_path_input
-
-        if st.button("🧪 Test Tesseract Configuration", key="btn_test_tess", use_container_width=True):
-            status = ocr_reader.check_tesseract_status(st.session_state.custom_tesseract_path)
-            if status["installed"]:
-                st.success(f"✅ {status['message']}")
-            else:
-                st.error(f"❌ {status['message']}")
-
-        st.markdown("---")
-        st.markdown(
-            """
-            **How to install Tesseract OCR on Windows:**
-            1. Download Windows installer from [UB-Mannheim Tesseract](https://github.com/UB-Mannheim/tesseract/wiki).
-            2. Run the installer (check **Additional language data (Hindi)** during setup).
-            3. Default install path: `C:\\Program Files\\Tesseract-OCR\\tesseract.exe`.
-            """
         )
         st.markdown("</div>", unsafe_allow_html=True)
 
-    # Full Diagnostic Audit Card
-    st.markdown('<div class="drishti-card">', unsafe_allow_html=True)
-    st.markdown('<h3 class="drishti-h3">📋 System Readiness Audit Checklist</h3>', unsafe_allow_html=True)
-
-    c_audit1, c_audit2 = st.columns(2)
-    with c_audit1:
-        st.write(f"• **Python Platform:** `{os.name}` / Windows")
-        st.write(f"• **App Directory:** `{config.BASE_DIR}`")
-        st.write(f"• **Temporary Audio Cache:** `{config.TEMP_AUDIO_DIR}`")
-    with c_audit2:
-        st.write(f"• **OpenCV (cv2) Available:** `{'Yes' if camera.cv2 is not None else 'No'}`")
-        st.write(f"• **pytesseract Available:** `{'Yes' if ocr_reader.pytesseract is not None else 'No'}`")
-        st.write(f"• **pyttsx3 Available:** `{'Yes' if speech.pyttsx3 is not None else 'No'}`")
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
 
 # -----------------------------------------------------------------------------
-# Section 7: About Drishti AI & Accessibility Safety
+# Section 7: About Drishti AI
 # -----------------------------------------------------------------------------
 def render_about():
     st.markdown('<h1 class="drishti-h1">ℹ️ About DRISHTI AI</h1>', unsafe_allow_html=True)
     st.markdown(
-        f'<p style="font-size: 1.25rem; color: #94A3B8;">{config.APP_TAGLINE} — Built for Accessibility, Privacy & Independence</p>',
-        unsafe_allow_html=True,
-    )
-
-    st.markdown('<div class="drishti-card">', unsafe_allow_html=True)
-    st.markdown(
         """
-        ### 🌟 Mission & Core Vision
-        **Drishti AI** (दृष्टि meaning *Vision* in Sanskrit and Hindi) was designed from the ground up to restore visual independence for people with blindness or low vision.
-        
-        Unlike mainstream vision assistants that transmit sensitive camera feeds to remote cloud servers, **Drishti AI operates completely offline on your local machine**:
-        - 🔒 **Zero Telemetry / Zero Cloud:** Your images, documents, and surroundings never leave your computer.
-        - ⚡ **Local Multimodal AI:** Powered by Gemma 4 / Ollama local neural models.
-        - 📖 **Bilingual OCR:** Read signs, prescription labels, notices, and bills in English and Hindi.
-        - 🗣️ **Offline Speech Synthesis:** Built-in Windows TTS voice readouts without internet dependency.
+        <div class="drishti-card">
+            <h3>🌟 Vision & Mission</h3>
+            <p>Drishti AI is a real-time, offline-first visual assistant designed to provide independence for visually impaired individuals through local multimodal AI and speech synthesis.</p>
+            <ul>
+                <li>🔒 <b>100% Offline:</b> No internet required for vision analysis or OCR.</li>
+                <li>🗣️ <b>Voice First:</b> Automatic speech readouts in English and Hindi.</li>
+                <li>🎙️ <b>Hands-Free Voice Commands:</b> Start, Stop, and Resume via voice.</li>
+                <li>📖 <b>Bilingual OCR:</b> Read signage and labels seamlessly.</li>
+            </ul>
+        </div>
         """,
         unsafe_allow_html=True,
     )
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # Safety Notice
-    st.markdown('<div class="safety-banner">', unsafe_allow_html=True)
-    st.markdown(
-        """
-        ### ⚠️ Critical Safety and Orientation Guidelines
-        Drishti AI is an accessibility assistant, not a certified navigation system.
-        - **Never cross streets or navigate stairs solely relying on AI scene descriptions.**
-        - **Do not make medical decisions without human verification of medicine labels.**
-        - **Always utilize traditional mobility aids (such as a white cane or guide dog) and consult orientation and mobility specialists.**
-        - Drishti AI communicates uncertainty when images are dark, blurry, or occluded to prevent misinformation.
-        """,
-        unsafe_allow_html=True,
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # Architecture Overview
-    st.markdown('<div class="drishti-card">', unsafe_allow_html=True)
-    st.markdown(
-        """
-        ### 🛠️ Architecture & Technologies
-        - **Frontend UI:** Streamlit with accessible high-contrast themes and keyboard focus rings.
-        - **Multimodal AI:** Gemma 4 / Ollama via `/api/chat` with base64 encoded image pipelines.
-        - **OCR Engine:** Tesseract OCR with OpenCV adaptive noise reduction and thresholding.
-        - **Speech Synthesis:** pyttsx3 offline text-to-speech engine with Windows SAPI5 voice routing.
-        - **Computer Vision:** Pillow and OpenCV.
-        """,
-        unsafe_allow_html=True,
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
 
 
 # -----------------------------------------------------------------------------
@@ -1153,14 +1347,14 @@ def render_about():
 # -----------------------------------------------------------------------------
 def main():
     sec = st.session_state.active_section
-    if sec == "Home Dashboard":
-        render_home_dashboard()
+    if sec == "Camera Assistant":
+        render_camera_assistant()
     elif sec == "Describe My Surroundings":
         render_describe_surroundings()
     elif sec == "Read Text (OCR)":
         render_read_text_ocr()
-    elif sec == "Camera Assistant":
-        render_camera_assistant()
+    elif sec == "Home Dashboard":
+        render_home_dashboard()
     elif sec == "Voice Assistant":
         render_voice_assistant()
     elif sec == "Settings & Diagnostics":
@@ -1168,7 +1362,7 @@ def main():
     elif sec == "About Drishti AI":
         render_about()
     else:
-        render_home_dashboard()
+        render_camera_assistant()
 
 
 if __name__ == "__main__":

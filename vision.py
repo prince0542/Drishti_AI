@@ -6,6 +6,7 @@ using Gemma 4 / local multimodal models.
 
 import base64
 import io
+import re
 import time
 from typing import Dict, Any, List, Tuple, Union
 from PIL import Image
@@ -110,6 +111,8 @@ def describe_scene(
     ollama_url: str = DEFAULT_OLLAMA_URL,
     custom_prompt: str = None,
     timeout: int = OLLAMA_REQUEST_TIMEOUT,
+    max_dimension: int = 640,
+    max_tokens: int = 350,
 ) -> Dict[str, Any]:
     """
     Sends an image to the local Ollama vision endpoint (/api/chat) and returns
@@ -140,9 +143,9 @@ def describe_scene(
             "disclaimer": disclaimer,
         }
 
-    # 2. Encode image
+    # 2. Encode image with fast scaling
     try:
-        base64_image = encode_image_to_base64(image_input)
+        base64_image = encode_image_to_base64(image_input, max_dimension=max_dimension)
     except Exception as img_err:
         return {
             "success": False,
@@ -173,6 +176,7 @@ def describe_scene(
         "stream": False,
         "options": {
             "temperature": 0.2,  # Low temperature for factual, grounded visual descriptions
+            "num_predict": max_tokens,  # Fast generation limit for immediate response
         },
     }
 
@@ -189,7 +193,22 @@ def describe_scene(
         if response.status_code == 200:
             result_json = response.json()
             message_obj = result_json.get("message", {})
-            description = message_obj.get("content", "").strip()
+            content = message_obj.get("content", "").strip()
+            thinking = message_obj.get("thinking", "").strip()
+
+            # Clean out <think>...</think> or unclosed <think>... from content
+            clean_content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+            clean_content = re.sub(r"<think>.*", "", clean_content, flags=re.DOTALL).strip()
+
+            if clean_content:
+                description = clean_content
+            elif content:
+                description = re.sub(r"</?think>", "", content).strip()
+            elif thinking:
+                # Fallback to Ollama's thinking field if content was empty
+                description = re.sub(r"</?think>", "", thinking).strip()
+            else:
+                description = ""
 
             if not description:
                 return {
@@ -197,7 +216,7 @@ def describe_scene(
                     "description": "",
                     "model_used": model_name,
                     "duration_seconds": elapsed,
-                    "error": "The model returned an empty description.",
+                    "error": "The model returned an empty description. Please capture a clear photo and try again.",
                     "disclaimer": disclaimer,
                 }
 
