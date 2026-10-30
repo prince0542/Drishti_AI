@@ -27,6 +27,7 @@ import speech
 import camera
 import sample_images_generator
 import live_assistant
+import obstacle_engine
 
 # Page Configuration
 st.set_page_config(
@@ -63,6 +64,10 @@ def init_session_state():
         "active_section": "Camera Assistant",
         "voice_command_action": None,
         "last_auto_spoken_live": None,
+        "radar_active": False,
+        "radar_cam_idx": 1,
+        "radar_auto_alert": True,
+        "last_spoken_obstacle_alert": "",
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -270,9 +275,8 @@ apply_custom_styles()
 # -----------------------------------------------------------------------------
 def trigger_browser_speech(text: str, lang: str = "en"):
     """
-    Invokes the browser's native Web Speech API (HTML5 SpeechSynthesis) with
-    high-clarity natural voices, crisp 1.25x response rate, and zero-latency queue clearing.
-    Plays through the user's computer speakers or headphones in real time.
+    Invokes high-clarity speech synthesis on the parent browser window with
+    natural voice matching, responsive 1.2x pacing, and immediate playback.
     """
     if not text or not text.strip():
         return
@@ -284,17 +288,18 @@ def trigger_browser_speech(text: str, lang: str = "en"):
     <script>
     (function() {{
         try {{
-            if ('speechSynthesis' in window) {{
-                window.speechSynthesis.cancel();
+            var synth = (window.parent && window.parent.speechSynthesis) ? window.parent.speechSynthesis : window.speechSynthesis;
+            var Utterance = (window.parent && window.parent.SpeechSynthesisUtterance) ? window.parent.SpeechSynthesisUtterance : SpeechSynthesisUtterance;
+            if (synth && Utterance) {{
+                synth.cancel();
                 
-                var utterance = new SpeechSynthesisUtterance({safe_text});
-                utterance.rate = 1.25;  // Fast, crisp, responsive pace
-                utterance.pitch = 1.02; // Enhanced clarity
+                var utterance = new Utterance({safe_text});
+                utterance.rate = 1.15;  // Crisp, intelligible pace
+                utterance.pitch = 1.0;  // Natural pitch
                 utterance.lang = '{voice_lang}';
 
-                // Find highest quality natural voice
                 function selectBestVoice() {{
-                    var voices = window.speechSynthesis.getVoices();
+                    var voices = synth.getVoices();
                     if (!voices || voices.length === 0) return null;
                     var target = '{voice_lang}'.toLowerCase().split('-')[0];
                     var matches = voices.filter(function(v) {{
@@ -313,14 +318,14 @@ def trigger_browser_speech(text: str, lang: str = "en"):
                 var best = selectBestVoice();
                 if (best) {{
                     utterance.voice = best;
-                }} else if (window.speechSynthesis.onvoiceschanged !== undefined) {{
-                    window.speechSynthesis.onvoiceschanged = function() {{
+                }} else if (synth.onvoiceschanged !== undefined) {{
+                    synth.onvoiceschanged = function() {{
                         var v = selectBestVoice();
                         if (v) utterance.voice = v;
                     }};
                 }}
 
-                window.speechSynthesis.speak(utterance);
+                synth.speak(utterance);
             }}
         }} catch(e) {{
             console.error('Speech synthesis error:', e);
@@ -332,12 +337,23 @@ def trigger_browser_speech(text: str, lang: str = "en"):
 
 
 def speak_text(text: str):
-    """Speaks text using Web Speech API and generates local audio file."""
+    """Speaks text using Web Speech API, generates local audio file, and plays system audio."""
     if not text or not text.strip():
         return
 
     st.session_state.last_spoken_text = text.strip()
     trigger_browser_speech(text, lang=st.session_state.language)
+
+    # Hardware speech synthesis directly on laptop speakers (100% offline, zero latency)
+    try:
+        speech.speech_manager.speak_direct(
+            text=text,
+            voice_id=st.session_state.selected_voice_id,
+            rate=st.session_state.speech_rate,
+            volume=st.session_state.speech_volume,
+        )
+    except Exception:
+        pass
 
     try:
         res = speech.speech_manager.generate_audio_file(
@@ -357,9 +373,10 @@ def stop_all_speech():
     speech.speech_manager.stop()
     js_stop = """
     <script>
-    if ('speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
-    }
+    try {
+        var synth = (window.parent && window.parent.speechSynthesis) ? window.parent.speechSynthesis : window.speechSynthesis;
+        if (synth) synth.cancel();
+    } catch(e) {}
     </script>
     """
     components.html(js_stop, height=0, width=0)
@@ -663,7 +680,11 @@ def render_camera_assistant():
         unsafe_allow_html=True,
     )
 
-    tab_live, tab_snapshot = st.tabs(["🟢 Real-Time Live Assistant (Hands-Free)", "📸 Photo Snapshot Mode"])
+    tab_live, tab_radar, tab_snapshot = st.tabs([
+        "🟢 Real-Time Live Assistant (Hands-Free)",
+        "🚶 Real-Time Obstacle Radar (Assistive Walking)",
+        "📸 Photo Snapshot Mode",
+    ])
 
     # -------------------------------------------------------------------------
     # TAB 1: Real-Time Live Assistant (Continuous Background Scanning)
@@ -800,7 +821,201 @@ def render_camera_assistant():
             st.rerun()
 
     # -------------------------------------------------------------------------
-    # TAB 2: Photo Snapshot Mode (Existing Single Photo Capture Preserved)
+    # TAB 2: Real-Time Obstacle Radar & Assistive Walking Awareness
+    # -------------------------------------------------------------------------
+    with tab_radar:
+        # Full-Duplex Voice Command Listener
+        render_voice_command_listener()
+
+        # Header & Safety Notice
+        st.markdown(
+            """
+            <div style="background: rgba(30, 41, 59, 0.4); border-left: 4px solid #6366F1; padding: 10px 14px; border-radius: 6px; margin-bottom: 1rem;">
+                <p style="margin: 0; font-size: 0.95rem; color: #E2E8F0;">
+                    🚶 <b>Assistive Walking Radar:</b> Evaluates 3 spatial zones (Left, Center, Right), tracks obstacles (chairs, tables, people, doors, stairs), analyzes ground free-space, and announces immediate collision warnings.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        # Operational Status Badges
+        r_model = '<span class="status-badge badge-online">⚡ YOLOv8n + ByteTrack (60ms)</span>'
+        r_state = '<span class="status-badge badge-online">🔄 Radar: Scanning</span>' if st.session_state.radar_active else '<span class="status-badge">🔄 Radar: Idle</span>'
+        r_alert = '<span class="status-badge badge-online">🔊 Voice Alerts: Active</span>' if st.session_state.radar_auto_alert else '<span class="status-badge badge-warning">🔊 Voice Alerts: Muted</span>'
+
+        c_badges, c_cam = st.columns([2, 1])
+        with c_badges:
+            st.markdown(f'<div style="margin-bottom: 0.5rem;">{r_model} {r_state} {r_alert}</div>', unsafe_allow_html=True)
+        with c_cam:
+            st.session_state.radar_cam_idx = st.selectbox(
+                "Radar Camera Index:",
+                options=[1, 0],
+                format_func=lambda x: f"📷 Camera Index {x} ({'Default' if x == 1 else 'Alternate'})",
+                key="radar_camera_selector",
+                label_visibility="collapsed",
+            )
+
+        # Radar Controls
+        col_r1, col_r2, col_r3 = st.columns([1, 1, 1.2])
+        with col_r1:
+            if not st.session_state.radar_active:
+                if st.button("▶️ Start Walking Radar (रडार शुरू)", key="btn_radar_start", use_container_width=True, type="primary"):
+                    st.session_state.radar_active = True
+                    speak_text("Walking obstacle radar activated. Center path monitoring active.")
+                    st.rerun()
+            else:
+                if st.button("⏹️ Stop Radar (रोकें)", key="btn_radar_stop", use_container_width=True):
+                    st.session_state.radar_active = False
+                    stop_all_speech()
+                    st.info("Obstacle radar halted.")
+                    st.rerun()
+
+        with col_r2:
+            st.session_state.radar_auto_alert = st.toggle(
+                "🔊 Auto-Voice Alerts",
+                value=st.session_state.radar_auto_alert,
+                help="Automatically speaks critical warnings when an obstacle is detected in walking path.",
+            )
+
+        with col_r3:
+            st.caption("ℹ️ Press **[Spacebar]** to Start/Pause, **[Esc]** to Stop immediately.")
+
+        # Radar Video Feed & Real-Time Metrics
+        col_feed, col_data = st.columns([1.2, 1])
+
+        current_frame = None
+        radar_result = None
+
+        if st.session_state.radar_active:
+            # Capture frame from active camera
+            cam_idx = st.session_state.radar_cam_idx
+            cap = None
+            try:
+                # DirectShow first on Windows
+                if hasattr(camera.cv2, "CAP_DSHOW"):
+                    cap = camera.cv2.VideoCapture(cam_idx, camera.cv2.CAP_DSHOW)
+                if cap is None or not cap.isOpened():
+                    cap = camera.cv2.VideoCapture(cam_idx)
+                
+                if cap.isOpened():
+                    ret, raw_frame = cap.read()
+                    if ret and raw_frame is not None:
+                        current_frame = raw_frame
+                cap.release()
+            except Exception:
+                if cap:
+                    cap.release()
+
+            if current_frame is not None:
+                # Process frame through ObstacleAwarenessSystem
+                radar_result = obstacle_engine.obstacle_system.process_frame(
+                    frame=current_frame,
+                    lang=st.session_state.language,
+                    enable_tracking=True,
+                )
+
+                # Check for critical audio warnings
+                if radar_result.critical_alert and st.session_state.radar_auto_alert:
+                    if radar_result.critical_alert != st.session_state.last_spoken_obstacle_alert:
+                        st.session_state.last_spoken_obstacle_alert = radar_result.critical_alert
+                        speak_text(radar_result.critical_alert)
+
+        with col_feed:
+            st.markdown('<div class="drishti-card">', unsafe_allow_html=True)
+            st.markdown('<h3 class="drishti-h3">🚶 Spatial Walking Radar View</h3>', unsafe_allow_html=True)
+            if st.session_state.radar_active and radar_result is not None:
+                rgb_annotated = camera.cv2.cvtColor(radar_result.annotated_frame, camera.cv2.COLOR_BGR2RGB)
+                st.image(
+                    rgb_annotated,
+                    caption=f"Real-Time Spatial Grid ({radar_result.inference_time_ms} ms | YOLOv8n + ByteTrack)",
+                    use_container_width=True,
+                )
+            elif st.session_state.radar_active:
+                st.info("🔄 Connecting camera sensor and initializing spatial grid...")
+            else:
+                st.markdown(
+                    """
+                    <div style="background: #0B0F19; border: 2px dashed #334155; border-radius: 12px; padding: 3rem 1rem; text-align: center; color: #94A3B8;">
+                        <span style="font-size: 3.5rem;">🚶</span>
+                        <p style="margin-top: 10px; font-weight: 700; font-size: 1.15rem; color: #F8FAFC;">Walking Radar is Idle</p>
+                        <p style="font-size: 0.95rem; color: #94A3B8;">Click <b>Start Walking Radar</b> or press <b>[Spacebar]</b> to begin spatial obstacle detection.</p>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        with col_data:
+            # 1. Walkable Corridor Free Space Meters
+            st.markdown('<div class="drishti-card">', unsafe_allow_html=True)
+            st.markdown('<h3 class="drishti-h3">🧭 Walkable Corridor Clearance</h3>', unsafe_allow_html=True)
+
+            c_left = radar_result.corridor.left_free_score if radar_result else 1.0
+            c_center = radar_result.corridor.center_free_score if radar_result else 1.0
+            c_right = radar_result.corridor.right_free_score if radar_result else 1.0
+
+            st.write(f"**Left Zone (बाएं):** {int(c_left * 100)}% Free Space")
+            st.progress(float(c_left))
+
+            st.write(f"**Center Walking Path (सामने का रास्ता):** {int(c_center * 100)}% Free Space")
+            st.progress(float(c_center))
+
+            st.write(f"**Right Zone (दाएं):** {int(c_right * 100)}% Free Space")
+            st.progress(float(c_right))
+
+            # 2. Active Voice Alert Display Card
+            st.markdown('<h3 class="drishti-h3" style="margin-top: 1.25rem;">📢 Active Voice Warning</h3>', unsafe_allow_html=True)
+            active_msg = radar_result.critical_alert if (radar_result and radar_result.critical_alert) else st.session_state.last_spoken_obstacle_alert
+            if active_msg:
+                st.markdown(f'<div class="result-text-box" style="border-color: #EF4444; background: rgba(239, 68, 68, 0.15);">{active_msg}</div>', unsafe_allow_html=True)
+                render_audio_controls(active_msg, key_prefix="radar_audio_ctrl")
+            else:
+                st.success("✅ Path ahead is clear. No collision hazards detected.")
+
+            # 3. Tracked Obstacle Table
+            st.markdown('<h3 class="drishti-h3" style="margin-top: 1.25rem;">🎯 Detected Obstacles (Radar)</h3>', unsafe_allow_html=True)
+            if radar_result and radar_result.obstacles:
+                for obs in radar_result.obstacles:
+                    tier_color = "#EF4444" if obs.proximity_tier.value == "critical" else ("#F59E0B" if obs.proximity_tier.value == "warning" else "#10B981")
+                    trend_icon = "⚠️ Approaching" if obs.motion_trend.value == "approaching" else ("⏹️ Static" if obs.motion_trend.value == "stationary" else "➡️ Receding")
+                    st.markdown(
+                        f"""
+                        <div style="background: #0F172A; border-left: 4px solid {tier_color}; padding: 8px 12px; border-radius: 6px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <b style="color: #F8FAFC; font-size: 1rem;">📦 {obs.class_name.upper()}</b>
+                                <span style="font-size: 0.8rem; color: #94A3B8; margin-left: 8px;">Zone: <b>{obs.zone.value.upper()}</b></span>
+                            </div>
+                            <div style="text-align: right;">
+                                <span style="font-size: 0.85rem; font-weight: 700; color: {tier_color};">{obs.proximity_tier.value.upper()} ({int(obs.relative_depth*100)}%)</span>
+                                <span style="font-size: 0.75rem; color: #64748B; margin-left: 6px;">{trend_icon}</span>
+                            </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.caption("No obstacles in frame.")
+
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        # Assistive Safety Disclaimer
+        st.markdown(
+            """
+            <div style="background: rgba(15, 23, 42, 0.6); border: 1px dashed #475569; border-radius: 8px; padding: 10px 14px; margin-top: 1rem; font-size: 0.85rem; color: #94A3B8;">
+                ⚠️ <b>Experimental Prototype Notice:</b> Drishti AI Obstacle Radar is an assistive sensory aid for indoor awareness, NOT a certified orientation and mobility device. Always use a white cane or sighted guide when walking. Never rely solely on AI for collision avoidance in traffic or outdoor environments.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        # Auto-refresh loop when radar is active for real-time video streaming
+        if st.session_state.radar_active:
+            time.sleep(0.12)
+            st.rerun()
+
+    # -------------------------------------------------------------------------
+    # TAB 3: Photo Snapshot Mode (Existing Single Photo Capture Preserved)
     # -------------------------------------------------------------------------
     with tab_snapshot:
         col_t1, col_t2 = st.columns([1.6, 1])

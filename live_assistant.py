@@ -258,13 +258,18 @@ class LiveAssistantController:
         self._speak_callback = callback
 
     def speak_announcement(self, text: str):
+        # 1. Immediate offline hardware speech synthesis (100% reliable across background threads)
+        try:
+            speech.speech_manager.speak_direct(text, rate=config.TTS_DEFAULT_RATE)
+        except Exception:
+            pass
+
+        # 2. Forward to Streamlit web session callback if available
         if self._speak_callback:
             try:
                 self._speak_callback(text)
             except Exception:
                 pass
-        else:
-            speech.speech_manager.speak_direct(text, rate=config.TTS_DEFAULT_RATE)
 
     def start(self, camera_index: int = None, lang: str = "en", scan_interval: float = 2.5) -> str:
         """Starts continuous live scanning in background."""

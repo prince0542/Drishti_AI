@@ -174,6 +174,7 @@ def describe_scene(
             }
         ],
         "stream": False,
+        "think": False,
         "options": {
             "temperature": 0.2,  # Low temperature for factual, grounded visual descriptions
             "num_predict": max_tokens,  # Fast generation limit for immediate response
